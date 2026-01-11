@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pymysql
+pydantic
+python-multipart
+longbridge
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
