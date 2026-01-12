@@ -1620,6 +1620,7 @@ except ImportError:
 if asynccontextmanager:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        global is_monitoring
         # 确保系统配置存在默认值
         try:
             conn = get_db_connection()
@@ -1652,62 +1653,6 @@ if asynccontextmanager:
 else:
     # Python 3.6 使用 startup/shutdown 事件
     lifespan = None
-
-async def lifespan_python36():
-    # 确保系统配置存在默认值
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        inserted = ensure_default_system_configs(cursor)
-        if inserted:
-            conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.warning(f"初始化系统配置失败: {e}")
-
-    # 启动时初始化SDK
-    global longbridge_sdk
-    if longbridge_sdk is None:
-        longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
-    await longbridge_sdk.connect()
-
-    # 启动异步任务队列
-    await task_queue.start()
-
-async def lifespan_python36_shutdown():
-    global is_monitoring
-    is_monitoring = False
-    await task_queue.stop()
-    # 确保系统配置存在默认值
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        inserted = ensure_default_system_configs(cursor)
-        if inserted:
-            conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.warning(f"初始化系统配置失败: {e}")
-
-    # 启动时初始化SDK
-    global longbridge_sdk
-    if longbridge_sdk is None:
-        longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
-    await longbridge_sdk.connect()
-
-    # 启动异步任务队列
-    await task_queue.start()
-
-    yield
-
-    # 关闭时
-    global is_monitoring
-    is_monitoring = False
-
-    # 停止任务队列
-    await task_queue.stop()
 
 
 # 创建FastAPI应用
