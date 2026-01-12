@@ -1704,7 +1704,6 @@ async def lifespan_python36_shutdown():
 
     # 关闭时
     global is_monitoring
-
     is_monitoring = False
 
     # 停止任务队列
