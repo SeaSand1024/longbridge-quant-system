@@ -309,6 +309,34 @@ def is_test_mode() -> bool:
         return False
 
 
+def load_user_longbridge_config(user_id: int) -> dict:
+    """加载用户的长桥配置"""
+    conn = get_db_connection()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+    cursor.execute("""
+        SELECT config_key, config_value
+        FROM user_config
+        WHERE user_id = %s AND config_key IN (
+            'longbridge_app_key', 'longbridge_app_secret', 'longbridge_access_token',
+            'longbridge_http_url', 'longbridge_quote_ws_url', 'longbridge_trade_ws_url'
+        )
+    """, (user_id,))
+    configs = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    config_dict = {row['config_key']: row['config_value'] for row in configs}
+    
+    return {
+        'app_key': config_dict.get('longbridge_app_key', ''),
+        'app_secret': config_dict.get('longbridge_app_secret', ''),
+        'access_token': config_dict.get('longbridge_access_token', ''),
+        'http_url': config_dict.get('longbridge_http_url', ''),
+        'quote_ws_url': config_dict.get('longbridge_quote_ws_url', ''),
+        'trade_ws_url': config_dict.get('longbridge_trade_ws_url', '')
+    }
+
+
 # SSE 连接管理
 sse_clients = set()
 
@@ -795,7 +823,7 @@ class LongBridgeSDK:
     async def get_static_info(self, symbols: List[str]) -> dict:
         """
         获取标的静态信息（用于判定正股/期权）。
-        返回：{symbol: security_type_object_or_string}
+        返回：{symbol: {'type': security_type, 'lot_size': 最小交易单位}}
         """
         if self.use_real_sdk and self.quote_ctx:
             try:
@@ -809,9 +837,13 @@ class LongBridgeSDK:
                 for info in info_list or []:
                     sec_symbol = getattr(info, 'symbol', None)
                     sec_type = getattr(info, 'security_type', None) or getattr(info, 'type', None)
+                    lot_size = getattr(info, 'lot_size', None) or getattr(info, 'lot_size', 1)  # 默认1
                     if sec_symbol:
-                        type_map[sec_symbol.replace('.US', '').replace('.HK', '').replace('.SH', '').replace('.SZ',
-                                                                                                             '')] = sec_type
+                        normalized_symbol = sec_symbol.replace('.US', '').replace('.HK', '').replace('.SH', '').replace('.SZ', '')
+                        type_map[normalized_symbol] = {
+                            'type': sec_type,
+                            'lot_size': lot_size if lot_size and lot_size > 0 else 1
+                        }
                 return type_map
             except Exception as e:
                 logger.warning(f"获取静态信息失败，使用本地规则判定: {e}")
@@ -856,6 +888,27 @@ class LongBridgeSDK:
 
         if self.use_real_sdk and self.trade_ctx:
             try:
+                # 获取股票的 lot_size，对齐最小交易单位
+                normalized_symbol = symbol.replace('.US', '').replace('.HK', '').replace('.SH', '').replace('.SZ', '')
+                static_info_list = await self.get_static_info([symbol])
+                lot_size = 1  # 默认值
+
+                if normalized_symbol in static_info_list:
+                    lot_size = static_info_list[normalized_symbol].get('lot_size', 1)
+
+                # 对齐 lot_size
+                aligned_quantity = (quantity // lot_size) * lot_size
+
+                if aligned_quantity == 0:
+                    return {
+                        'order_id': f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                        'status': 'FAILED',
+                        'message': f'下单数量{quantity}小于最小交易单位{lot_size}'
+                    }
+
+                if aligned_quantity != quantity:
+                    logger.info(f"数量对齐: {quantity} -> {aligned_quantity} (lot_size={lot_size})")
+
                 # 使用真实SDK下单
                 order_side = OrderSide.Buy if action == 'BUY' else OrderSide.Sell
 
@@ -864,7 +917,7 @@ class LongBridgeSDK:
                     symbol=symbol,
                     order_type=OrderType.LO,  # 限价单
                     side=order_side,
-                    submitted_quantity=quantity,
+                    submitted_quantity=aligned_quantity,
                     submitted_price=price,
                     time_in_force=TimeInForceType.Day
                 )
@@ -1036,6 +1089,25 @@ class LongBridgeSDK:
                         base_currency, 'USD')
                     position_market_value = max(usd_total_assets - usd_total_cash, 0)
 
+                    # 获取持仓信息
+                    positions = []
+                    try:
+                        stock_positions = self.trade_ctx.stock_positions()
+                        if stock_positions and hasattr(stock_positions, 'channels'):
+                            channels = getattr(stock_positions, 'channels', [])
+                            for channel in channels:
+                                if hasattr(channel, 'positions'):
+                                    for pos in channel.positions:
+                                        if hasattr(pos, 'quantity') and pos.quantity > 0:
+                                            positions.append({
+                                                'symbol': getattr(pos, 'symbol', ''),
+                                                'quantity': pos.quantity,
+                                                'cost_price': float(getattr(pos, 'cost_price', 0)),
+                                                'market_value': float(pos.quantity * getattr(pos, 'last_price', getattr(pos, 'cost_price', 0)))
+                                            })
+                    except Exception as e:
+                        logger.warning(f"获取持仓信息失败: {e}")
+
                     return {
                         'cash': usd_total_cash,
                         'total_assets': usd_total_assets,
@@ -1044,7 +1116,8 @@ class LongBridgeSDK:
                         'currency': 'USD',
                         'base_currency': base_currency,
                         'base_net_assets': base_net_assets,
-                        'multi_currency': multi_currency
+                        'multi_currency': multi_currency,
+                        'positions': positions
                     }
                 else:
                     logger.warning("未获取到账户余额数据")
@@ -1362,8 +1435,22 @@ class TradingStrategy:
                 })
 
             # 获取当前持仓列表（排除已有持仓的股票）
-            cursor.execute("SELECT symbol FROM positions WHERE quantity > 0")
-            existing_positions = cursor.fetchall()
+            if is_test_mode():
+                # 测试模式：从数据库查询持仓
+                cursor.execute("SELECT symbol FROM positions WHERE quantity > 0")
+                existing_positions = cursor.fetchall()
+            else:
+                # 实盘模式：从真实账户获取持仓
+                try:
+                    portfolio = await longbridge_sdk.get_account_balance()
+                    if portfolio and 'positions' in portfolio:
+                        existing_positions = [{'symbol': p['symbol']} for p in portfolio['positions'] if p.get('quantity', 0) > 0]
+                    else:
+                        existing_positions = []
+                except Exception as e:
+                    logger.warning(f"获取真实账户持仓失败: {e}，使用数据库数据")
+                    cursor.execute("SELECT symbol FROM positions WHERE quantity > 0")
+                    existing_positions = cursor.fetchall()
             existing_symbols = {pos['symbol'] for pos in existing_positions}
             current_position_count = len(existing_symbols)
 
@@ -1377,19 +1464,30 @@ class TradingStrategy:
                     best_stock = max(available_stocks, key=lambda x: x['acceleration'])
 
                     if best_stock['acceleration'] > 0:
-                        # 使用固定金额购买
-                        quantity = int(self.buy_amount / best_stock['price'])
+                        # 获取股票的 lot_size
+                        static_info_list = await longbridge_sdk.get_static_info([best_stock['symbol']])
+                        normalized_symbol = best_stock['symbol'].replace('.US', '').replace('.HK', '').replace('.SH', '').replace('.SZ', '')
+                        lot_size = 1  # 默认值
 
-                        if quantity > 0:
+                        if normalized_symbol in static_info_list:
+                            lot_size = static_info_list[normalized_symbol].get('lot_size', 1)
+
+                        # 使用固定金额购买，并计算对齐 lot_size 的数量
+                        quantity = int(self.buy_amount / best_stock['price'])
+                        aligned_quantity = (quantity // lot_size) * lot_size
+
+                        if aligned_quantity > 0:
+                            logger.info(f"买入数量对齐: {quantity} -> {aligned_quantity} (lot_size={lot_size})")
+
                             # 下单
                             order_result = await longbridge_sdk.place_order(
                                 best_stock['symbol'],
                                 'BUY',
-                                quantity,
+                                aligned_quantity,
                                 best_stock['price']
                             )
 
-                            buy_amount = best_stock['price'] * quantity
+                            buy_amount = best_stock['price'] * aligned_quantity
 
                             # 记录交易
                             cursor.execute("""
@@ -1399,7 +1497,7 @@ class TradingStrategy:
                                 best_stock['symbol'],
                                 'BUY',
                                 best_stock['price'],
-                                quantity,
+                                aligned_quantity,
                                 buy_amount,
                                 best_stock['acceleration'],
                                 order_result['status'],
@@ -1407,22 +1505,26 @@ class TradingStrategy:
                             ))
                             conn.commit()
 
-                            # 更新持仓表（使用实际的表结构：avg_cost）
-                            cursor.execute("""
-                                INSERT INTO positions (symbol, quantity, avg_cost)
-                                VALUES (%s, %s, %s)
-                                ON DUPLICATE KEY UPDATE
-                                quantity = VALUES(quantity),
-                                avg_cost = VALUES(avg_cost)
-                            """, (
-                                best_stock['symbol'],
-                                quantity,
-                                best_stock['price']  # 使用买入价格作为平均成本
-                            ))
-                            conn.commit()
+                            # 只有订单成功才更新持仓表
+                            if order_result['status'] == 'SUCCESS':
+                                # 更新持仓表（使用实际的表结构：avg_cost）
+                                cursor.execute("""
+                                    INSERT INTO positions (symbol, quantity, avg_cost)
+                                    VALUES (%s, %s, %s)
+                                    ON DUPLICATE KEY UPDATE
+                                    quantity = VALUES(quantity),
+                                    avg_cost = VALUES(avg_cost)
+                                """, (
+                                    best_stock['symbol'],
+                                    aligned_quantity,
+                                    best_stock['price']  # 使用买入价格作为平均成本
+                                ))
+                                conn.commit()
 
                             logger.info(
-                                f"买入 {best_stock['symbol']} {quantity}股 @ ${best_stock['price']:.2f}, 金额: ${buy_amount:,.2f} (当前持仓: {current_position_count + 1}/{self.max_concurrent_positions})")
+                                f"买入 {best_stock['symbol']} {aligned_quantity}股 @ ${best_stock['price']:.2f}, 金额: ${buy_amount:,.2f} (当前持仓: {current_position_count + 1}/{self.max_concurrent_positions})")
+                        else:
+                            logger.warning(f"计算数量{quantity}小于最小交易单位{lot_size}，跳过买入")
 
                             # 通知前端刷新账户总览
                             await notify_sse_clients('trade', {
@@ -1611,69 +1713,45 @@ async def monitoring_loop():
 
 
 # 生命周期管理
-try:
-    from contextlib import asynccontextmanager
-except ImportError:
-    # Python 3.6 不支持 asynccontextmanager，使用老式方法
-    asynccontextmanager = None
+from contextlib import asynccontextmanager
 
-if asynccontextmanager:
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        global is_monitoring
-        # 确保系统配置存在默认值
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            inserted = ensure_default_system_configs(cursor)
-            if inserted:
-                conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            logger.warning(f"初始化系统配置失败: {e}")
 
-        # 启动时初始化SDK
-        global longbridge_sdk
-        if longbridge_sdk is None:
-            longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
-        await longbridge_sdk.connect()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 确保系统配置存在默认值
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        inserted = ensure_default_system_configs(cursor)
+        if inserted:
+            conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"初始化系统配置失败: {e}")
 
-        # 启动异步任务队列
-        await task_queue.start()
+    # 启动时初始化SDK
+    global longbridge_sdk
+    if longbridge_sdk is None:
+        longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
+    await longbridge_sdk.connect()
 
-        yield
+    # 启动异步任务队列
+    await task_queue.start()
 
-        # 关闭时
-        global is_monitoring
-        is_monitoring = False
+    yield
 
-        # 停止任务队列
-        await task_queue.stop()
-else:
-    # Python 3.6 使用 startup/shutdown 事件
-    lifespan = None
+    # 关闭时
+    global is_monitoring
+
+    is_monitoring = False
+
+    # 停止任务队列
+    await task_queue.stop()
 
 
 # 创建FastAPI应用
-if lifespan:
-    app = FastAPI(title="美股量化交易系统", lifespan=lifespan)
-else:
-    app = FastAPI(title="美股量化交易系统")
-    # Python 3.6 使用启动/关闭事件
-    @app.on_event("startup")
-    async def startup_event():
-        global longbridge_sdk
-        if longbridge_sdk is None:
-            longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
-        await longbridge_sdk.connect()
-        await task_queue.start()
-
-    @app.on_event("shutdown")
-    async def shutdown_event():
-        global is_monitoring
-        is_monitoring = False
-        await task_queue.stop()
+app = FastAPI(title="美股量化交易系统", lifespan=lifespan)
 
 # 配置CORS
 app.add_middleware(
@@ -1830,6 +1908,20 @@ async def login(request: LoginRequest, response: Response):
             path="/",
             samesite="lax"
         )
+
+        # 加载用户的长桥配置
+        global longbridge_sdk, LONGBRIDGE_CONFIG
+        user_config = load_user_longbridge_config(user['id'])
+        
+        # 只有当用户配置了完整的SDK信息时才更新
+        if user_config['app_key'] and user_config['app_secret'] and user_config['access_token']:
+            LONGBRIDGE_CONFIG.update(user_config)
+            try:
+                longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
+                await longbridge_sdk.connect()
+                logger.info(f"用户 {user['username']} 长桥SDK已加载")
+            except Exception as e:
+                logger.warning(f"用户 {user['username']} 长桥SDK加载失败: {e}")
 
         return response
 
@@ -2329,14 +2421,34 @@ async def get_portfolio(current_user: dict = Depends(get_current_user)):
         sdk_position_market_value = balance.get('position_market_value')
         multi_currency = balance.get('multi_currency', {})
 
-        # 获取持仓列表（根据测试模式过滤）
+        # 获取持仓列表（优先使用SDK返回的真实持仓）
+        sdk_positions = balance.get('positions', [])
+        
+        # 始终需要数据库连接来获取stocks列表
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
-        if is_test:
-            cursor.execute("SELECT * FROM positions WHERE quantity > 0 AND test_mode = 0")
+        
+        if not is_test and sdk_positions:
+            # 实盘模式且有SDK持仓数据，使用SDK持仓
+            positions = []
+            for sdk_pos in sdk_positions:
+                positions.append({
+                    'symbol': sdk_pos['symbol'],
+                    'quantity': sdk_pos['quantity'],
+                    'avg_cost': sdk_pos.get('cost_price', 0),
+                    'current_price': None,
+                    'profit_loss': None,
+                    'profit_loss_pct': None,
+                    'updated_at': None,
+                    'test_mode': 0
+                })
         else:
-            cursor.execute("SELECT * FROM positions WHERE quantity > 0 AND test_mode = 1")
-        positions = cursor.fetchall()
+            # 测试模式或SDK无数据，从数据库读取
+            if is_test:
+                cursor.execute("SELECT * FROM positions WHERE quantity > 0 AND test_mode = 1")
+            else:
+                cursor.execute("SELECT * FROM positions WHERE quantity > 0 AND test_mode = 0")
+            positions = cursor.fetchall()
 
         # 获取市场数据
         cursor.execute("SELECT symbol FROM stocks WHERE is_active = 1")
@@ -2707,18 +2819,40 @@ async def get_monitoring_status():
 
 @app.get("/api/longbridge/config")
 async def get_longbridge_config(current_user: dict = Depends(get_current_user)):
-    """获取长桥配置（隐藏敏感信息）"""
+    """获取长桥配置（隐藏敏感信息，支持用户隔离）"""
+    user_id = current_user['id']
+    
+    # 从用户配置表读取
+    conn = get_db_connection()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+    cursor.execute("""
+        SELECT config_key, config_value
+        FROM user_config
+        WHERE user_id = %s AND config_key IN (
+            'longbridge_app_key', 'longbridge_app_secret', 'longbridge_access_token',
+            'longbridge_http_url', 'longbridge_quote_ws_url', 'longbridge_trade_ws_url'
+        )
+    """, (user_id,))
+    configs = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    config_dict = {row['config_key']: row['config_value'] for row in configs}
+    
+    app_key = config_dict.get('longbridge_app_key', '')
+    app_secret = config_dict.get('longbridge_app_secret', '')
+    access_token = config_dict.get('longbridge_access_token', '')
+    
     return {
         "code": 0,
         "data": {
-            "app_key": LONGBRIDGE_CONFIG['app_key'][:8] + "..." if LONGBRIDGE_CONFIG['app_key'] else "",
-            "app_secret": "***" if LONGBRIDGE_CONFIG['app_secret'] else "",
-            "access_token": "***" if LONGBRIDGE_CONFIG['access_token'] else "",
-            "http_url": LONGBRIDGE_CONFIG.get('http_url', ''),
-            "quote_ws_url": LONGBRIDGE_CONFIG.get('quote_ws_url', ''),
-            "trade_ws_url": LONGBRIDGE_CONFIG.get('trade_ws_url', ''),
-            "is_configured": bool
-            (LONGBRIDGE_CONFIG['app_key'] and LONGBRIDGE_CONFIG['app_secret'] and LONGBRIDGE_CONFIG['access_token']),
+            "app_key": app_key[:8] + "..." if app_key else "",
+            "app_secret": "***" if app_secret else "",
+            "access_token": "***" if access_token else "",
+            "http_url": config_dict.get('longbridge_http_url', ''),
+            "quote_ws_url": config_dict.get('longbridge_quote_ws_url', ''),
+            "trade_ws_url": config_dict.get('longbridge_trade_ws_url', ''),
+            "is_configured": bool(app_key and app_secret and access_token),
             "sdk_available": LONGBRIDGE_AVAILABLE,
             "use_real_sdk": longbridge_sdk.use_real_sdk
         }
@@ -2736,19 +2870,12 @@ class LongBridgeConfigUpdate(BaseModel):
 
 @app.post("/api/longbridge/config")
 async def update_longbridge_config(config: LongBridgeConfigUpdate, current_user: dict = Depends(get_current_user)):
-    """更新长桥配置并重新连接"""
+    """更新长桥配置并重新连接（支持用户隔离）"""
     global longbridge_sdk, LONGBRIDGE_CONFIG
+    user_id = current_user['id']
 
     try:
-        # 更新配置
-        LONGBRIDGE_CONFIG['app_key'] = config.app_key
-        LONGBRIDGE_CONFIG['app_secret'] = config.app_secret
-        LONGBRIDGE_CONFIG['access_token'] = config.access_token
-        LONGBRIDGE_CONFIG['http_url'] = config.http_url
-        LONGBRIDGE_CONFIG['quote_ws_url'] = config.quote_ws_url
-        LONGBRIDGE_CONFIG['trade_ws_url'] = config.trade_ws_url
-
-        # 保存到数据库
+        # 保存到用户配置表
         conn = get_db_connection()
         cursor = conn.cursor()
         configs = [
@@ -2761,16 +2888,23 @@ async def update_longbridge_config(config: LongBridgeConfigUpdate, current_user:
         ]
         for key, value, desc in configs:
             cursor.execute("""
-                INSERT INTO system_config (config_key, config_value, description)
-                VALUES (%s, %s, %s)
+                INSERT INTO user_config (user_id, config_key, config_value, description)
+                VALUES (%s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE config_value = %s, description = %s
-            """, (key, value, desc, value, desc))
+            """, (user_id, key, value, desc, value, desc))
         conn.commit()
         cursor.close()
         conn.close()
 
+        # 更新全局配置
+        LONGBRIDGE_CONFIG['app_key'] = config.app_key
+        LONGBRIDGE_CONFIG['app_secret'] = config.app_secret
+        LONGBRIDGE_CONFIG['access_token'] = config.access_token
+        LONGBRIDGE_CONFIG['http_url'] = config.http_url
+        LONGBRIDGE_CONFIG['quote_ws_url'] = config.quote_ws_url
+        LONGBRIDGE_CONFIG['trade_ws_url'] = config.trade_ws_url
+
         # 重新初始化SDK并更新全局变量
-        global longbridge_sdk
         longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
         await longbridge_sdk.connect()
 
