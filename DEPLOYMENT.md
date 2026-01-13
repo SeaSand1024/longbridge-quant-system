@@ -5,8 +5,8 @@
 - **地域**: ap-singapore (新加坡)
 - **实例ID**: lhins-9nowtk7j
 - **公网IP**: 43.152.67.232
-- **系统**: CentOS 7
-- **项目路径**: `/root/longbridge-quant-system_20260111114910`
+- **系统**: CentOS 7 (Python 3.6)
+- **项目路径**: `/root/longbridge-quant-system_latest`
 - **访问地址**: http://43.152.67.232:8000
 
 ## 部署状态
@@ -20,10 +20,11 @@
 5. [x] 数据库初始化 (创建quant_system数据库和表结构)
 6. [x] 服务启动 (运行在0.0.0.0:8000)
 7. [x] 配置防火墙规则 (开放8000端口)
+8. [x] 代码兼容性修复 (适配Python 3.6)
 
 ### ⏸ 待处理
 
-8. [ ] 配置长桥SDK凭证 (环境变量或前端配置)
+9. [ ] 配置长桥SDK凭证 (环境变量或前端配置)
 
 ## 数据库配置
 
@@ -57,8 +58,9 @@ ss -tulpn | grep 8000
 
 ### 重启服务
 ```bash
-cd /root/longbridge-quant-system_20260111114910
+cd /root/longbridge-quant-system_latest
 pkill -f 'python.*uvicorn'
+source $HOME/.cargo/env
 MYSQL_PASSWORD=root123 nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/quant_system.log 2>&1 &
 echo $! > /tmp/quant_system.pid
 ```
@@ -201,11 +203,21 @@ A: 检查防火墙和腾讯云安全组规则
 
 ## 进度跟踪
 
-当前部署进度: 50%
+当前部署进度: 100%
 
 - 项目文件: ✅ 已上传
 - 开发环境: ✅ Rust已安装
 - 数据库: ✅ MariaDB已安装
-- Python依赖: ⏳ 编译中...
-- 数据库初始化: ⏸ 待处理
-- 服务启动: ⏸ 待处理
+- Python依赖: ✅ 已安装
+- 数据库初始化: ✅ 完成
+- 服务启动: ✅ 运行中
+- 兼容性修复: ✅ 适配Python 3.6
+
+## 最新更新
+
+**2026-01-13 22:28**
+- 通过Git拉取最新代码
+- 修复Python 3.6兼容性问题:
+  - 使用`startup/shutdown`事件替代`asynccontextmanager`
+  - 使用`asyncio.ensure_future`替代`asyncio.create_task`
+- 服务成功启动并运行在http://43.152.67.232:8000
