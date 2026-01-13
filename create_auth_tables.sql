@@ -7,17 +7,17 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT 0,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
 
 -- 创建刷新令牌表
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
-    token VARCHAR(255) UNIQUE NOT NULL,
+    token VARCHAR(191) UNIQUE NOT NULL,
     expires_at DATETIME NOT NULL,
     created_at TIMESTAMP DEFAULT 0,
     INDEX idx_token (token),
     INDEX idx_user_id (user_id),
     INDEX idx_expires_at (expires_at),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
