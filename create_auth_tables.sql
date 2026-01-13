@@ -21,3 +21,18 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     INDEX idx_expires_at (expires_at),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
+-- 创建用户配置表
+CREATE TABLE IF NOT EXISTS user_config (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    config_key VARCHAR(100) NOT NULL,
+    config_value TEXT,
+    description VARCHAR(255),
+    created_at TIMESTAMP DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_user_config (user_id, config_key),
+    INDEX idx_user_id (user_id),
+    INDEX idx_config_key (config_key),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
