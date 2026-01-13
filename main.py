@@ -1712,12 +1712,11 @@ async def monitoring_loop():
         await task_queue.stop()
 
 
-# 生命周期管理
-from contextlib import asynccontextmanager
+# 生命周期管理 - 使用FastAPI的startup和shutdown事件替代asynccontextmanager (兼容Python 3.6)
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+# 启动事件
+@app.on_event("startup")
+async def startup_event():
     # 确保系统配置存在默认值
     try:
         conn = get_db_connection()
@@ -1739,11 +1738,12 @@ async def lifespan(app: FastAPI):
     # 启动异步任务队列
     await task_queue.start()
 
-    yield
 
+# 关闭事件
+@app.on_event("shutdown")
+async def shutdown_event():
     # 关闭时
     global is_monitoring
-
     is_monitoring = False
 
     # 停止任务队列
@@ -1751,7 +1751,7 @@ async def lifespan(app: FastAPI):
 
 
 # 创建FastAPI应用
-app = FastAPI(title="美股量化交易系统", lifespan=lifespan)
+app = FastAPI(title="美股量化交易系统")
 
 # 配置CORS
 app.add_middleware(
