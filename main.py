@@ -1712,6 +1712,9 @@ async def monitoring_loop():
         await task_queue.stop()
 
 
+# 创建FastAPI应用
+app = FastAPI(title="美股量化交易系统")
+
 # 生命周期管理 - 使用FastAPI的startup和shutdown事件替代asynccontextmanager (兼容Python 3.6)
 
 # 启动事件
@@ -1749,9 +1752,6 @@ async def shutdown_event():
     # 停止任务队列
     await task_queue.stop()
 
-
-# 创建FastAPI应用
-app = FastAPI(title="美股量化交易系统")
 
 # 配置CORS
 app.add_middleware(
