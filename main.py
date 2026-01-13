@@ -19,6 +19,10 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # 长桥SDK导入 - 完全可选,不影响系统运行
 try:
     from longbridge.openapi import QuoteContext, TradeContext, Config as LBConfig, Market, OrderSide, OrderType, \
@@ -35,10 +39,6 @@ except ImportError as e:
     class PushQuote:
         """模拟PushQuote类型"""
         pass
-
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # 数据库配置（从环境变量获取）
 DB_CONFIG = {
