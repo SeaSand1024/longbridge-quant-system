@@ -198,6 +198,7 @@ async function loadInitialData() {
     await loadStocks();
     await updateMonitoringStatus();
     await loadStatistics();
+    await loadSettings();  // 加载设置，包括止盈目标
 }
 
 // 加载股票列表
@@ -1011,26 +1012,46 @@ function renderPositions(positions) {
 async function loadSettings() {
     try {
         const response = await fetch(`${API_BASE}/api/config`, { credentials: 'include' });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
         const result = await response.json();
 
-        if (result.code === 0) {
+        if (result.code === 0 && result.data) {
             const config = result.data;
-            const profitTarget = config.profit_target || '1.0';
-            document.getElementById('profitTargetInput').value = profitTarget;
-            document.getElementById('profitTargetQuickInput').value = profitTarget;
+            // 正确读取配置值：后端返回的数据结构是 {values: {...}, definitions: {...}, defaults: {...}}
+            if (config.values) {
+                const profitTarget = config.values.profit_target || '1.0';
+                const profitTargetInput = document.getElementById('profitTargetInput');
+                const profitTargetQuickInput = document.getElementById('profitTargetQuickInput');
+                
+                if (profitTargetInput) {
+                    profitTargetInput.value = profitTarget;
+                }
+                if (profitTargetQuickInput) {
+                    profitTargetQuickInput.value = profitTarget;
+                }
 
-            const maxConcurrentPositions = config.max_concurrent_positions || '1';
-            document.getElementById('maxConcurrentPositionsInput').value = maxConcurrentPositions;
+                const maxConcurrentPositions = config.values.max_concurrent_positions || '1';
+                const maxConcurrentPositionsInput = document.getElementById('maxConcurrentPositionsInput');
+                if (maxConcurrentPositionsInput) {
+                    maxConcurrentPositionsInput.value = maxConcurrentPositions;
+                }
+            }
+        } else {
+            console.error('加载配置失败，API返回错误:', result);
         }
 
         // 加载长桥配置
-        const lbResponse = await fetch(`${API_BASE}/api/longbridge/config`, { credentials: 'include' });
-        const lbResult = await lbResponse.json();
-
-        if (lbResult.code === 0) {
-            const lbConfig = lbResult.data;
-            // 显示配置状态
-            updateLongBridgeStatus(lbConfig);
+        try {
+            const lbResponse = await fetch(`${API_BASE}/api/longbridge/config`, { credentials: 'include' });
+            const lbResult = await lbResponse.json();
+            if (lbResult.code === 0) {
+                const lbConfig = lbResult.data;
+                updateLongBridgeStatus(lbConfig);
+            }
+        } catch (lbError) {
+            console.error('加载长桥配置失败:', lbError);
         }
     } catch (error) {
         console.error('加载设置失败:', error);
