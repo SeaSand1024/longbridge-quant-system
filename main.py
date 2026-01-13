@@ -19,17 +19,19 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
-# 长桥SDK导入
+# 长桥SDK导入 - 完全可选,不影响系统运行
 try:
     from longbridge.openapi import QuoteContext, TradeContext, Config as LBConfig, Market, OrderSide, OrderType, \
         TimeInForceType, SubType, PushQuote
 
     LONGBRIDGE_AVAILABLE = True
-except ImportError:
+    logger.info("长桥SDK已加载")
+except ImportError as e:
     LONGBRIDGE_AVAILABLE = False
+    logger.warning(f"长桥SDK未安装: {e}")
+    logger.info("系统将在模拟模式下运行")
 
-
-    # 定义模拟类型
+    # 定义模拟类型,确保代码兼容性
     class PushQuote:
         """模拟PushQuote类型"""
         pass
