@@ -407,7 +407,7 @@ class AsyncTaskQueue:
         """启动任务队列"""
         if not self.is_running:
             self.is_running = True
-            self.processing_task = asyncio.create_task(self._process_queue())
+            self.processing_task = asyncio.ensure_future(self._process_queue())
             logger.info("异步任务队列已启动")
 
     async def stop(self):
@@ -1640,7 +1640,7 @@ async def monitoring_loop():
     def on_quote_update(symbol: str, quote: PushQuote):
         """实时行情回调"""
         # 将实时行情处理放入任务队列
-        asyncio.create_task(task_queue.add_task(trading_strategy.handle_realtime_quote, symbol, quote))
+        asyncio.ensure_future(task_queue.add_task(trading_strategy.handle_realtime_quote, symbol, quote))
 
     # 初始化检查时间
     last_buy_check_time = datetime.now()
@@ -2769,7 +2769,7 @@ async def start_monitoring(request: dict = None):
             return {"code": 1, "message": f"更新买入金额失败: {str(e)}"}
 
     # 使用任务队列启动监控循环
-    monitoring_task = asyncio.create_task(monitoring_loop())
+    monitoring_task = asyncio.ensure_future(monitoring_loop())
 
     return {"code": 0, "message": "监控已启动"}
 
