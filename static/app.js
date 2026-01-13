@@ -1221,9 +1221,7 @@ function updateLongBridgeStatus(config) {
         <div class="mt-3 p-3 bg-yellow-900 bg-opacity-30 border border-yellow-600 rounded-lg">
             <p class="text-xs text-yellow-200">
                 <i class="fas fa-info-circle mr-1"></i>
-                ${!config.sdk_available ? '长桥SDK未安装，请运行: pip install longbridge' : ''}
-                ${config.sdk_available && !config.is_configured ? '请配置长桥API凭证以启用真实交易' : ''}
-                ${config.sdk_available && config.is_configured ? '配置已保存但连接失败，当前使用模拟数据' : ''}
+                ${config.sdk_available ? '请配置长桥API凭证以启用真实交易' : '当前使用模拟数据运行(服务器Python版本不支持longbridge SDK)'}
             </p>
         </div>
         ` : `
