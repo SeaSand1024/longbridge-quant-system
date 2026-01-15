@@ -2,40 +2,104 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>美股量化交易系统</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        /* 移动端优化 */
+        * {
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        /* 隐藏滚动条但保持滚动功能 */
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
+        /* 移动端表格横向滚动优化 */
+        .mobile-table-container {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scroll-snap-type: x mandatory;
+        }
+        
+        /* 移动端卡片触摸反馈 */
+        .mobile-touch {
+            transition: transform 0.15s ease, opacity 0.15s ease;
+        }
+        .mobile-touch:active {
+            transform: scale(0.97);
+            opacity: 0.9;
+        }
+        
+        /* 移动端弹窗优化 */
+        @media (max-width: 640px) {
+            .mobile-modal {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                max-width: 100%;
+                border-radius: 20px 20px 0 0;
+                max-height: 90vh;
+                animation: slideUp 0.3s ease;
+            }
+            @keyframes slideUp {
+                from { transform: translateY(100%); }
+                to { transform: translateY(0); }
+            }
+        }
+        
+        /* 标签页滚动条美化 */
+        .tabs-scroll::-webkit-scrollbar {
+            height: 3px;
+        }
+        .tabs-scroll::-webkit-scrollbar-track {
+            background: rgba(55, 65, 81, 0.5);
+        }
+        .tabs-scroll::-webkit-scrollbar-thumb {
+            background: rgba(59, 130, 246, 0.5);
+            border-radius: 3px;
+        }
+    </style>
 </head>
-<body class="bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 min-h-screen text-white">
+<body class="bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 min-h-screen text-white overflow-x-hidden">
     <!-- 登录页面 -->
     <div id="loginPage" class="min-h-screen flex items-center justify-center px-4">
-        <div class="bg-gray-800 rounded-xl shadow-2xl p-8 w-full max-w-md">
-            <div class="text-center mb-8">
-                <i class="fas fa-chart-line text-blue-400 text-5xl mb-4"></i>
-                <h1 class="text-2xl font-bold">美股量化交易系统</h1>
-                <p class="text-gray-400 mt-2">登录以继续</p>
+        <div class="bg-gray-800 rounded-xl shadow-2xl p-6 sm:p-8 w-full max-w-md mobile-touch">
+            <div class="text-center mb-6 sm:mb-8">
+                <i class="fas fa-chart-line text-blue-400 text-4xl sm:text-5xl mb-3 sm:mb-4"></i>
+                <h1 class="text-xl sm:text-2xl font-bold">美股量化交易系统</h1>
+                <p class="text-gray-400 mt-1 sm:mt-2 text-sm">登录以继续</p>
             </div>
-            <form id="loginForm" class="space-y-6">
+            <form id="loginForm" class="space-y-4 sm:space-y-6">
                 <div>
-                    <label class="block text-sm font-medium mb-2">用户名</label>
-                    <input type="text" id="loginUsername" required
-                           class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200"
+                    <label class="block text-xs sm:text-sm font-medium mb-2">用户名</label>
+                    <input type="text" id="loginUsername" required autocapitalize="none"
+                           class="w-full px-4 py-3 sm:py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base"
                            placeholder="请输入用户名">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium mb-2">密码</label>
+                    <label class="block text-xs sm:text-sm font-medium mb-2">密码</label>
                     <input type="password" id="loginPassword" required
-                           class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200"
+                           class="w-full px-4 py-3 sm:py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base"
                            placeholder="请输入密码">
                 </div>
-                <div id="loginError" class="hidden text-red-400 text-sm text-center"></div>
-                <button type="submit" class="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors duration-200 font-medium">
+                <div id="loginError" class="hidden text-red-400 text-xs sm:text-sm text-center"></div>
+                <button type="submit" class="w-full px-6 py-3.5 sm:py-3 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors duration-200 font-medium text-base mobile-touch">
                     <i class="fas fa-sign-in-alt mr-2"></i>登录
                 </button>
             </form>
-            <div class="mt-6 text-center text-sm text-gray-400">
+            <div class="mt-4 sm:mt-6 text-center text-xs sm:text-sm text-gray-400">
                 还没有账号？<a href="#" id="showRegisterBtn" class="text-blue-400 hover:text-blue-300">立即注册</a>
             </div>
         </div>
@@ -43,43 +107,43 @@
 
     <!-- 注册页面 -->
     <div id="registerPage" class="hidden min-h-screen flex items-center justify-center px-4">
-        <div class="bg-gray-800 rounded-xl shadow-2xl p-8 w-full max-w-md">
-            <div class="text-center mb-8">
-                <i class="fas fa-user-plus text-green-400 text-5xl mb-4"></i>
-                <h1 class="text-2xl font-bold">注册账号</h1>
-                <p class="text-gray-400 mt-2">创建新账号</p>
+        <div class="bg-gray-800 rounded-xl shadow-2xl p-6 sm:p-8 w-full max-w-md mobile-touch">
+            <div class="text-center mb-6 sm:mb-8">
+                <i class="fas fa-user-plus text-green-400 text-4xl sm:text-5xl mb-3 sm:mb-4"></i>
+                <h1 class="text-xl sm:text-2xl font-bold">注册账号</h1>
+                <p class="text-gray-400 mt-1 sm:mt-2 text-sm">创建新账号</p>
             </div>
-            <form id="registerForm" class="space-y-6">
+            <form id="registerForm" class="space-y-4 sm:space-y-6">
                 <div>
-                    <label class="block text-sm font-medium mb-2">用户名</label>
-                    <input type="text" id="registerUsername" required
-                           class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200"
+                    <label class="block text-xs sm:text-sm font-medium mb-2">用户名</label>
+                    <input type="text" id="registerUsername" required autocapitalize="none"
+                           class="w-full px-4 py-3 sm:py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base"
                            placeholder="请输入用户名">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium mb-2">邮箱</label>
-                    <input type="email" id="registerEmail" required
-                           class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200"
+                    <label class="block text-xs sm:text-sm font-medium mb-2">邮箱</label>
+                    <input type="email" id="registerEmail" required autocapitalize="none"
+                           class="w-full px-4 py-3 sm:py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base"
                            placeholder="请输入邮箱">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium mb-2">密码</label>
+                    <label class="block text-xs sm:text-sm font-medium mb-2">密码</label>
                     <input type="password" id="registerPassword" required minlength="6"
-                           class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200"
+                           class="w-full px-4 py-3 sm:py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base"
                            placeholder="请输入密码（至少6位）">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium mb-2">确认密码</label>
+                    <label class="block text-xs sm:text-sm font-medium mb-2">确认密码</label>
                     <input type="password" id="registerConfirmPassword" required minlength="6"
-                           class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200"
+                           class="w-full px-4 py-3 sm:py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base"
                            placeholder="请再次输入密码">
                 </div>
-                <div id="registerError" class="hidden text-red-400 text-sm text-center"></div>
-                <button type="submit" class="w-full px-6 py-3 bg-green-600 hover:bg-green-700 rounded-lg transition-colors duration-200 font-medium">
+                <div id="registerError" class="hidden text-red-400 text-xs sm:text-sm text-center"></div>
+                <button type="submit" class="w-full px-6 py-3.5 sm:py-3 bg-green-600 hover:bg-green-700 rounded-lg transition-colors duration-200 font-medium text-base mobile-touch">
                     <i class="fas fa-user-plus mr-2"></i>注册
                 </button>
             </form>
-            <div class="mt-6 text-center text-sm text-gray-400">
+            <div class="mt-4 sm:mt-6 text-center text-xs sm:text-sm text-gray-400">
                 已有账号？<a href="#" id="showLoginBtn" class="text-blue-400 hover:text-blue-300">立即登录</a>
             </div>
         </div>
@@ -174,7 +238,7 @@
         <!-- 标签页 -->
         <div class="bg-gray-800 bg-opacity-90 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
             <!-- 标签头 -->
-            <div class="flex overflow-x-auto border-b border-gray-700">
+            <div class="flex overflow-x-auto scrollbar-hide tabs-scroll border-b border-gray-700 -mx-3 sm:mx-0 px-3 sm:px-0">
                 <button class="tab-button active px-4 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium transition-colors duration-200 whitespace-nowrap" data-tab="stocks">
                     <i class="fas fa-list mr-1 sm:mr-2"></i>股票列表
                 </button>
@@ -210,7 +274,7 @@
                             </button>
                         </div>
                     </div>
-                    <div class="overflow-x-auto -mx-3 sm:mx-0">
+                    <div class="overflow-x-auto mobile-table-container -mx-3 sm:mx-0">
                         <div class="inline-block min-w-full align-middle">
                             <table class="w-full">
                                 <thead>
@@ -334,7 +398,7 @@
                         <h3 class="text-lg font-bold mb-4 flex items-center">
                             <i class="fas fa-briefcase mr-2 text-purple-400"></i>持仓明细
                         </h3>
-                        <div class="overflow-x-auto">
+                        <div class="overflow-x-auto mobile-table-container">
                             <table class="w-full">
                                 <thead>
                                     <tr class="border-b border-gray-700">
@@ -392,7 +456,7 @@
                             <i class="fas fa-sync-alt mr-2"></i>刷新
                         </button>
                     </div>
-                    <div class="overflow-x-auto -mx-3 sm:mx-0">
+                    <div class="overflow-x-auto mobile-table-container -mx-3 sm:mx-0">
                         <div class="inline-block min-w-full align-middle">
                             <table class="w-full">
                                 <thead>
@@ -439,7 +503,7 @@
                             </button>
                         </div>
                     </div>
-                    <div class="overflow-x-auto -mx-3 sm:mx-0">
+                    <div class="overflow-x-auto mobile-table-container -mx-3 sm:mx-0">
                         <div class="inline-block min-w-full align-middle">
                             <table class="w-full">
                                 <thead>
@@ -476,6 +540,29 @@
                 <div id="settingsTab" class="tab-content hidden">
                     <h2 class="text-xl font-bold mb-6">系统配置</h2>
                     <div class="max-w-2xl space-y-6">
+                        <!-- 同步持仓 -->
+                        <div class="bg-gradient-to-r from-cyan-600 to-cyan-800 rounded-lg p-4 sm:p-6">
+                            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 space-y-3 sm:space-y-0">
+                                <div>
+                                    <h3 class="text-lg sm:text-xl font-bold flex items-center">
+                                        <i class="fas fa-wallet mr-2"></i>同步持仓
+                                    </h3>
+                                    <p class="text-sm text-cyan-200 mt-1">从长桥账号同步持仓到本地数据库</p>
+                                </div>
+                                <button id="syncPositionsBtn" class="px-4 sm:px-6 py-2 bg-white hover:bg-gray-100 text-cyan-600 rounded-lg transition-colors duration-200 text-sm font-medium">
+                                    <i class="fas fa-sync mr-2"></i>立即同步
+                                </button>
+                            </div>
+                            <div class="bg-cyan-900 bg-opacity-30 rounded-lg p-3">
+                                <p class="text-xs text-cyan-200">
+                                    <i class="fas fa-info-circle mr-1"></i>
+                                    <strong>功能说明：</strong>从长桥账号获取当前持仓，同步到本地系统。<br>
+                                    <strong>适用场景：</strong>实盘模式，当长桥持仓发生变化时，点击此按钮手动同步。<br>
+                                    <strong>自动同步：</strong>系统每120秒自动同步一次，无需手动操作。
+                                </p>
+                            </div>
+                        </div>
+
                         <!-- 同步自选股 -->
                         <div class="bg-gradient-to-r from-purple-600 to-purple-800 rounded-lg p-4 sm:p-6">
                             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 space-y-3 sm:space-y-0">
@@ -560,71 +647,71 @@
     </div>
 
     <!-- 添加股票弹窗 -->
-    <div id="addStockModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4">
-        <div class="bg-gray-800 rounded-xl shadow-2xl p-4 sm:p-6 w-full max-w-md">
-            <div class="flex justify-between items-center mb-4">
+    <div id="addStockModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center z-50 px-0 sm:px-4">
+        <div class="mobile-modal bg-gray-800 rounded-xl sm:rounded-xl shadow-2xl p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4 sticky top-0 bg-gray-800 pb-4 border-b border-gray-700">
                 <h3 class="text-lg sm:text-xl font-bold">添加股票</h3>
-                <button id="closeModalBtn" class="text-gray-400 hover:text-white transition-colors duration-200">
+                <button id="closeModalBtn" class="text-gray-400 hover:text-white transition-colors duration-200 p-2">
                     <i class="fas fa-times text-xl"></i>
                 </button>
             </div>
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium mb-2">股票代码</label>
-                    <input type="text" id="newStockSymbol" placeholder="例如: AAPL"
-                           class="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200">
+                    <label class="block text-xs sm:text-sm font-medium mb-2">股票代码</label>
+                    <input type="text" id="newStockSymbol" placeholder="例如: AAPL" autocapitalize="characters"
+                           class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium mb-2">公司名称</label>
+                    <label class="block text-xs sm:text-sm font-medium mb-2">公司名称</label>
                     <input type="text" id="newStockName" placeholder="例如: Apple Inc."
-                           class="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200">
+                           class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium mb-2">类型</label>
+                    <label class="block text-xs sm:text-sm font-medium mb-2">类型</label>
                     <div class="flex space-x-4">
-                        <label class="flex items-center cursor-pointer">
-                            <input type="radio" name="stockType" value="STOCK" checked class="mr-2">
-                            <span class="flex items-center">
+                        <label class="flex items-center cursor-pointer mobile-touch p-2">
+                            <input type="radio" name="stockType" value="STOCK" checked class="mr-2 w-5 h-5">
+                            <span class="flex items-center text-sm sm:text-base">
                                 <i class="fas fa-chart-line text-blue-400 mr-1"></i>正股
                             </span>
                         </label>
-                        <label class="flex items-center cursor-pointer">
-                            <input type="radio" name="stockType" value="OPTION" class="mr-2">
-                            <span class="flex items-center">
+                        <label class="flex items-center cursor-pointer mobile-touch p-2">
+                            <input type="radio" name="stockType" value="OPTION" class="mr-2 w-5 h-5">
+                            <span class="flex items-center text-sm sm:text-base">
                                 <i class="fas fa-chart-area text-orange-400 mr-1"></i>期权
                             </span>
                         </label>
                     </div>
                 </div>
                 <div>
-                    <label class="block text-sm font-medium mb-2">分组</label>
+                    <label class="block text-xs sm:text-sm font-medium mb-2">分组</label>
                     <div class="flex items-center space-x-2">
-                        <select id="newStockGroup" class="flex-1 px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200">
+                        <select id="newStockGroup" class="flex-1 px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base">
                             <option value="未分组">未分组</option>
                         </select>
-                        <button id="addNewGroupBtn" class="px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors duration-200" title="新建分组">
+                        <button id="addNewGroupBtn" class="px-4 py-3 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors duration-200 mobile-touch" title="新建分组">
                             <i class="fas fa-plus"></i>
                         </button>
                     </div>
                 </div>
                 <div id="newGroupInput" class="hidden">
-                    <label class="block text-sm font-medium mb-2">新分组名称</label>
+                    <label class="block text-xs sm:text-sm font-medium mb-2">新分组名称</label>
                     <div class="flex items-center space-x-2">
                         <input type="text" id="newGroupName" placeholder="输入分组名称"
-                               class="flex-1 px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200">
-                        <button id="saveGroupBtn" class="px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors duration-200">
+                               class="flex-1 px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 transition-colors duration-200 text-base">
+                        <button id="saveGroupBtn" class="px-4 py-3 bg-green-600 hover:bg-green-700 rounded-lg transition-colors duration-200 mobile-touch">
                             <i class="fas fa-check"></i>
                         </button>
-                        <button id="cancelGroupBtn" class="px-3 py-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors duration-200">
+                        <button id="cancelGroupBtn" class="px-4 py-3 bg-red-600 hover:bg-red-700 rounded-lg transition-colors duration-200 mobile-touch">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
                 </div>
-                <div class="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3">
-                    <button id="confirmAddStockBtn" class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors duration-200 font-medium">
+                <div class="flex flex-col space-y-2">
+                    <button id="confirmAddStockBtn" class="flex-1 px-4 py-3.5 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors duration-200 font-medium text-base mobile-touch">
                         <i class="fas fa-check mr-2"></i>确认
                     </button>
-                    <button id="cancelAddStockBtn" class="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors duration-200 font-medium">
+                    <button id="cancelAddStockBtn" class="flex-1 px-4 py-3.5 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors duration-200 font-medium text-base mobile-touch">
                         <i class="fas fa-times mr-2"></i>取消
                     </button>
                 </div>
@@ -633,15 +720,15 @@
     </div>
 
     <!-- 详情弹窗 -->
-    <div id="detailModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4">
-        <div class="bg-gray-800 rounded-xl shadow-2xl p-4 sm:p-6 w-full max-w-6xl max-h-[90vh] overflow-y-auto">
+    <div id="detailModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center z-50 px-0 sm:px-4">
+        <div class="mobile-modal bg-gray-800 rounded-xl sm:rounded-xl shadow-2xl p-4 sm:p-6 w-full max-w-6xl max-h-[90vh] overflow-y-auto">
             <div class="flex justify-between items-center mb-4 sticky top-0 bg-gray-800 pb-4 border-b border-gray-700 z-10">
-                <h3 class="text-lg sm:text-xl font-bold" id="detailModalTitle">详情</h3>
-                <button id="closeDetailModalBtn" class="text-gray-400 hover:text-white transition-colors duration-200">
+                <h3 class="text-base sm:text-lg sm:text-xl font-bold" id="detailModalTitle">详情</h3>
+                <button id="closeDetailModalBtn" class="text-gray-400 hover:text-white transition-colors duration-200 p-2">
                     <i class="fas fa-times text-xl"></i>
                 </button>
             </div>
-            <div id="detailModalContent" class="space-y-4">
+            <div id="detailModalContent" class="space-y-4 pb-4">
                 <!-- 动态加载内容 -->
             </div>
         </div>

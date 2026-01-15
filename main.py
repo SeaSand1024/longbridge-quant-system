@@ -701,7 +701,7 @@ class LongBridgeSDK:
             return self._get_mock_quotes(symbols)
 
     async def get_history_orders(self, symbol: Optional[str] = None, status_filter: Optional[List] = None,
-                                 days: int = 90, limit: int = 50) -> List[dict]:
+                                 days: int = 90, limit: int = 1000) -> List[dict]:
         """获取历史订单"""
         if self.use_real_sdk and self.trade_ctx:
             try:
@@ -1226,6 +1226,97 @@ class TradingStrategy:
         self.positions_cache = {}  # 持仓缓存 {symbol: {quantity, avg_cost}}
         self.market_data_cache = {}  # 市场数据缓存
 
+    async def sync_positions_from_longbridge(self):
+        """从长桥同步持仓到本地数据库（仅实盘模式）"""
+        if is_test_mode():
+            return
+
+        try:
+            # 获取长桥的持仓信息
+            balance = await longbridge_sdk.get_account_balance()
+            sdk_positions = balance.get('positions', [])
+
+            if not sdk_positions:
+                logger.debug("长桥无持仓数据，跳过同步")
+                return
+
+            conn = get_db_connection()
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+            # 获取本地持仓
+            cursor.execute("SELECT symbol FROM positions WHERE test_mode = 0")
+            local_symbols = {row['symbol'] for row in cursor.fetchall()}
+
+            # 同步持仓数据
+            for sdk_pos in sdk_positions:
+                symbol = sdk_pos.get('symbol', '')
+                quantity = sdk_pos.get('quantity', 0)
+                cost_price = sdk_pos.get('cost_price', 0)
+
+                # 安全转换数量和成本
+                try:
+                    if hasattr(quantity, '__int__'):
+                        quantity = int(quantity)
+                    elif not isinstance(quantity, (int, float)):
+                        quantity = 0
+
+                    if hasattr(cost_price, '__float__'):
+                        cost_price = float(cost_price)
+                    elif not isinstance(cost_price, (int, float)):
+                        cost_price = 0
+                except Exception as e:
+                    logger.warning(f"转换持仓数据失败 {symbol}: {e}")
+                    continue
+
+                if quantity > 0:
+                    # 更新或插入持仓
+                    cursor.execute("""
+                        INSERT INTO positions (symbol, quantity, avg_cost, test_mode)
+                        VALUES (%s, %s, %s, 0)
+                        ON DUPLICATE KEY UPDATE
+                        quantity = VALUES(quantity),
+                        avg_cost = VALUES(avg_cost)
+                    """, (symbol, int(quantity), float(cost_price)))
+
+                    # 记录同步日志
+                    logger.info(f"同步持仓: {symbol} 数量={int(quantity)} 成本=${float(cost_price):.2f}")
+
+            # 清理本地已清仓但长桥没有的持仓
+            sdk_symbols = set()
+            for pos in sdk_positions:
+                qty = pos.get('quantity', 0)
+                try:
+                    if hasattr(qty, '__int__'):
+                        qty = int(qty)
+                    elif isinstance(qty, (int, float)):
+                        qty = int(qty)
+                    else:
+                        qty = 0
+                except:
+                    qty = 0
+
+                if qty > 0:
+                    symbol = pos.get('symbol', '')
+                    if symbol:
+                        sdk_symbols.add(symbol)
+
+            symbols_to_remove = local_symbols - sdk_symbols
+            if symbols_to_remove:
+                for symbol in symbols_to_remove:
+                    cursor.execute("DELETE FROM positions WHERE symbol = %s AND test_mode = 0", (symbol,))
+                    logger.info(f"清理已清仓持仓: {symbol}")
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            logger.info(f"持仓同步完成: 长桥持仓{len(sdk_symbols)}只，清理{len(symbols_to_remove)}只")
+
+        except Exception as e:
+            logger.error(f"同步长桥持仓失败: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     async def update_positions_cache(self):
         """更新持仓缓存"""
         try:
@@ -1649,18 +1740,24 @@ async def monitoring_loop():
     last_buy_check_time = datetime.now()
     last_position_update_time = datetime.now()
     last_market_data_update = datetime.now()
+    last_longbridge_sync_time = datetime.now()
 
     try:
         while is_monitoring:
             current_time = datetime.now()
 
-            # 1. 更新持仓缓存（每60秒更新一次，避免频繁数据库查询）
+            # 1. 同步长桥持仓（实盘模式每120秒同步一次）
+            if not is_test_mode() and (current_time - last_longbridge_sync_time).total_seconds() >= 120:
+                await task_queue.add_task(trading_strategy.sync_positions_from_longbridge)
+                last_longbridge_sync_time = current_time
+
+            # 2. 更新持仓缓存（每60秒更新一次，避免频繁数据库查询）
             if (current_time - last_position_update_time).total_seconds() >= 60:
                 # 将持仓更新放入任务队列
                 await task_queue.add_task(trading_strategy.update_positions_cache)
                 last_position_update_time = current_time
 
-            # 2. 获取市场数据（每30秒更新一次）
+            # 3. 获取市场数据（每30秒更新一次）
             if (current_time - last_market_data_update).total_seconds() >= 30:
                 # 将市场数据获取放入任务队列
                 await task_queue.add_task(trading_strategy.update_market_data_cache)
@@ -2201,7 +2298,7 @@ async def get_trades(limit: int = 50, current_user: dict = Depends(get_current_u
 async def get_orders(
         symbol: Optional[str] = None,
         days: Optional[int] = 90,
-        limit: int = 50,
+        limit: int = 1000,
         current_user: dict = Depends(get_current_user)
 ):
     """获取历史订单
@@ -2209,7 +2306,7 @@ async def get_orders(
     参数:
         symbol: 股票代码，可选
         days: 查询最近几天的订单，默认90天
-        limit: 返回数量限制，默认50条
+        limit: 返回数量限制，默认1000条
     """
     try:
         logger.info(f"获取历史订单: symbol={symbol}, days={days}, limit={limit}")
@@ -3073,6 +3170,47 @@ async def sync_longbridge_watchlist():
 
     except Exception as e:
         logger.error(f"同步自选股失败: {str(e)}")
+        return {
+            "code": 1,
+            "message": f"同步失败: {str(e)}"
+        }
+
+
+@app.post("/api/longbridge/sync-positions")
+async def sync_longbridge_positions(current_user: dict = Depends(get_current_user)):
+    """手动同步长桥持仓到本地数据库"""
+    try:
+        if is_test_mode():
+            return {
+                "code": 1,
+                "message": "当前是测试模式，无法同步实盘持仓"
+            }
+
+        if not longbridge_sdk.use_real_sdk or not longbridge_sdk.trade_ctx:
+            return {
+                "code": 1,
+                "message": "SDK未配置或未连接"
+            }
+
+        # 执行同步
+        await trading_strategy.sync_positions_from_longbridge()
+
+        # 获取同步后的持仓信息
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        cursor.execute("SELECT symbol, quantity, avg_cost FROM positions WHERE test_mode = 0 AND quantity > 0")
+        positions = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        return {
+            "code": 0,
+            "message": f"同步成功，当前持仓 {len(positions)} 只",
+            "data": positions
+        }
+
+    except Exception as e:
+        logger.error(f"手动同步持仓失败: {str(e)}")
         return {
             "code": 1,
             "message": f"同步失败: {str(e)}"

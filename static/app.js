@@ -4,6 +4,7 @@ const API_BASE = '';
 // 全局状态
 let isMonitoring = false;
 let accelerationChart = null;
+let isMobile = window.innerWidth <= 640;
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -12,6 +13,11 @@ document.addEventListener('DOMContentLoaded', () => {
     loadInitialData();
     initAccelerationChart();
     initSSE();  // 初始化SSE连接
+
+    // 监听窗口大小变化
+    window.addEventListener('resize', () => {
+        isMobile = window.innerWidth <= 640;
+    });
 
     // 定时刷新
     setInterval(() => {
@@ -85,9 +91,16 @@ function initTabs() {
 
     tabButtons.forEach((button, index) => {
         console.log(`设置第${index}个tab的点击事件:`, button.dataset.tab);
-        button.addEventListener('click', () => {
+        // 移动端优化：使用 click 事件
+        button.addEventListener('click', (e) => {
+            e.preventDefault();
             const tabName = button.dataset.tab;
             console.log('点击tab:', tabName);
+
+            // 移动端：平滑滚动到标签内容
+            if (isMobile) {
+                button.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }
 
             // 更新按钮状态
             tabButtons.forEach(btn => btn.classList.remove('active', 'bg-blue-600', 'text-white'));
@@ -172,6 +185,8 @@ function initEventListeners() {
 
     // 同步自选股
     document.getElementById('syncWatchlistBtn').addEventListener('click', syncLongbridgeWatchlist);
+    // 同步持仓
+    document.getElementById('syncPositionsBtn').addEventListener('click', syncLongbridgePositions);
     
     // 快速止盈目标输入框
     const profitTargetQuickInput = document.getElementById('profitTargetQuickInput');
@@ -1477,15 +1492,17 @@ function getRandomColor() {
 }
 
 function showNotification(message, type = 'info') {
-    // 简单的通知实现
+    // 简单的通知实现，移动端优化
     const notification = document.createElement('div');
-    notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${
+    const isMobile = window.innerWidth <= 640;
+    notification.className = `fixed ${isMobile ? 'bottom-4 left-4 right-4' : 'top-4 right-4'} px-6 py-3 rounded-lg shadow-lg text-white z-50 ${
         type === 'success' ? 'bg-green-600' : type === 'error' ? 'bg-red-600' : 'bg-blue-600'
     }`;
     notification.textContent = message;
 
     document.body.appendChild(notification);
 
+    // 3秒后移除
     setTimeout(() => {
         notification.remove();
     }, 3000);
@@ -1581,9 +1598,54 @@ async function syncLongbridgeWatchlist() {
     }
 }
 
+// 同步长桥持仓
+async function syncLongbridgePositions() {
+    const btn = document.getElementById('syncPositionsBtn');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>同步中...';
+
+    try {
+        const response = await fetch(`${API_BASE}/api/longbridge/sync-positions`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        const result = await response.json();
+
+        if (result.code === 0) {
+            const positions = result.data || [];
+            showNotification(`同步成功，当前持仓 ${positions.length} 只`, 'success');
+            await loadPortfolio();
+            await loadStatistics();
+        } else {
+            showNotification(result.message || '同步失败', 'error');
+        }
+    } catch (error) {
+        console.error('同步持仓失败:', error);
+        showNotification('同步失败: ' + error.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+}
+
 // 关闭详情弹窗
 function closeDetailModal() {
     document.getElementById('detailModal').classList.add('hidden');
+}
+
+// 移动端优化：关闭弹窗时重置滚动位置
+function closeAllModals() {
+    const modals = ['addStockModal', 'detailModal'];
+    modals.forEach(modalId => {
+        const modal = document.getElementById(modalId);
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+    });
 }
 
 // 显示活跃股票详情
@@ -1591,10 +1653,10 @@ async function showActiveStocksDetail() {
     try {
         const response = await fetch(`${API_BASE}/api/stocks`, { credentials: 'include' });
         const result = await response.json();
-        
+
         if (result.code === 0) {
             const activeStocks = result.data.filter(stock => stock.is_active === 1);
-            
+
             const content = `
                 <div class="space-y-4">
                     <div class="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg p-4">
@@ -1602,10 +1664,11 @@ async function showActiveStocksDetail() {
                         <p class="text-3xl font-bold">${activeStocks.length} 只</p>
                         <p class="text-sm text-blue-200 mt-2">当前正在监控的股票数量</p>
                     </div>
-                    
+
                     <div class="space-y-3">
                         ${activeStocks.length > 0 ? activeStocks.map(stock => `
-                            <div class="bg-gray-900 rounded-lg p-4 hover:bg-gray-700 transition-colors duration-200">
+                            <div class="bg-gray-900 rounded-lg p-4 hover:bg-gray-700 transition-colors duration-200 cursor-pointer stock-detail-btn"
+                                 onclick="closeDetailModal(); showStockDetail('${stock.symbol}')">
                                 <div class="flex justify-between items-start">
                                     <div>
                                         <h5 class="text-lg font-bold text-blue-400">${stock.symbol}</h5>
@@ -1615,15 +1678,18 @@ async function showActiveStocksDetail() {
                                         <i class="fas fa-check-circle mr-1"></i>活跃
                                     </span>
                                 </div>
-                                <div class="mt-3 pt-3 border-t border-gray-700">
+                                <div class="mt-3 pt-3 border-t border-gray-700 flex justify-between items-center">
                                     <p class="text-xs text-gray-400">添加时间: ${formatDateTime(stock.created_at)}</p>
+                                    <p class="text-xs text-blue-400">
+                                        <i class="fas fa-chevron-right mr-1"></i>点击查看详情
+                                    </p>
                                 </div>
                             </div>
                         `).join('') : '<p class="text-center text-gray-400 py-8">暂无活跃股票</p>'}
                     </div>
                 </div>
             `;
-            
+
             document.getElementById('detailModalTitle').innerHTML = '<i class="fas fa-chart-bar mr-2 text-blue-400"></i>活跃股票详情';
             document.getElementById('detailModalContent').innerHTML = content;
             document.getElementById('detailModal').classList.remove('hidden');
