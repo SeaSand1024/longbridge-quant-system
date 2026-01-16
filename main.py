@@ -674,24 +674,33 @@ class LongBridgeSDK:
 
         if self.use_real_sdk and self.quote_ctx:
             try:
-                # 使用真实SDK获取行情
-                quotes = self.quote_ctx.quote(symbols)
-                result = []
-                for quote in quotes:
-                    # 计算涨跌幅
-                    current_price = float(quote.last_done)
-                    prev_close = float(quote.prev_close) if hasattr(quote,
-                                                                    'prev_close') and quote.prev_close else current_price
-                    change_pct = ((current_price - prev_close) / prev_close) * 100 if prev_close > 0 else 0.0
+                # 分批查询（长桥SDK可能限制单次查询数量）
+                batch_size = 20
+                all_results = []
 
-                    result.append({
-                        'symbol': quote.symbol,
-                        'price': current_price,
-                        'change_pct': change_pct,  # 百分比
-                        'volume': int(quote.volume),
-                        'timestamp': datetime.now().isoformat()
-                    })
-                return result
+                for i in range(0, len(symbols), batch_size):
+                    batch_symbols = symbols[i:i + batch_size]
+                    logger.debug(f"查询行情批次: {i//batch_size + 1}, 股票数量: {len(batch_symbols)}")
+
+                    quotes = self.quote_ctx.quote(batch_symbols)
+
+                    for quote in quotes:
+                        # 计算涨跌幅
+                        current_price = float(quote.last_done)
+                        prev_close = float(quote.prev_close) if hasattr(quote,
+                                                                        'prev_close') and quote.prev_close else current_price
+                        change_pct = ((current_price - prev_close) / prev_close) * 100 if prev_close > 0 else 0.0
+
+                        all_results.append({
+                            'symbol': quote.symbol,
+                            'price': current_price,
+                            'change_pct': change_pct,  # 百分比
+                            'volume': int(quote.volume),
+                            'timestamp': datetime.now().isoformat()
+                        })
+
+                logger.info(f"成功获取 {len(all_results)} 只股票的实时行情")
+                return all_results
             except Exception as e:
                 logger.error(f"获取行情失败: {str(e)}")
                 # 失败时返回模拟数据
@@ -1368,7 +1377,8 @@ class TradingStrategy:
         try:
             conn = get_db_connection()
             cursor = conn.cursor(pymysql.cursors.DictCursor)
-            cursor.execute("SELECT symbol FROM stocks WHERE is_active = 1")
+            # 查询所有正股（不包括期权，不限制激活状态）
+            cursor.execute("SELECT symbol FROM stocks WHERE stock_type = 'STOCK'")
             stocks = cursor.fetchall()
             cursor.close()
             conn.close()
@@ -1500,11 +1510,11 @@ class TradingStrategy:
             # 加载配置
             await self._load_config(cursor)
 
-            cursor.execute("SELECT symbol, name FROM stocks WHERE is_active = 1 AND stock_type = 'STOCK'")
+            cursor.execute("SELECT symbol, name FROM stocks WHERE stock_type = 'STOCK'")
             stocks = cursor.fetchall()
 
             if not stocks:
-                logger.info("没有活跃的正股")
+                logger.info("没有正股")
                 return
 
             symbols = [stock['symbol'] for stock in stocks]
@@ -2248,7 +2258,8 @@ async def get_market_data(current_user: dict = Depends(get_current_user)):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
-        cursor.execute("SELECT symbol FROM stocks WHERE is_active = 1")
+        # 查询所有正股
+        cursor.execute("SELECT symbol FROM stocks WHERE stock_type = 'STOCK'")
         stocks = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -2551,7 +2562,7 @@ async def get_portfolio(current_user: dict = Depends(get_current_user)):
             positions = cursor.fetchall()
 
         # 获取市场数据
-        cursor.execute("SELECT symbol FROM stocks WHERE is_active = 1")
+        cursor.execute("SELECT symbol FROM stocks")
         active_stocks = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -3013,7 +3024,7 @@ async def update_longbridge_config(config: LongBridgeConfigUpdate, current_user:
             try:
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                cursor.execute("SELECT symbol FROM stocks WHERE is_active = 1")
+                cursor.execute("SELECT symbol FROM stocks")
                 active_symbols = [row[0] for row in cursor.fetchall()]
                 cursor.close()
                 conn.close()

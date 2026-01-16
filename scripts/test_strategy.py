@@ -36,14 +36,14 @@ async def test_strategy():
     print(f"止盈目标: {TEST_PROFIT_TARGET}%")
     print()
 
-    # 1. 获取所有活跃的正股
-    print("1. 获取活跃正股列表...")
+    # 1. 获取所有正股
+    print("1. 获取正股列表...")
     conn = get_db_connection()
     cursor = conn.cursor(pymysql.cursors.DictCursor)
     cursor.execute("""
-        SELECT symbol, name 
-        FROM stocks 
-        WHERE is_active = 1 AND stock_type = 'STOCK'
+        SELECT symbol, name
+        FROM stocks
+        WHERE stock_type = 'STOCK'
         ORDER BY symbol
     """)
     stocks = cursor.fetchall()

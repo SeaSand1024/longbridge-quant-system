@@ -264,7 +264,7 @@
                 <!-- 股票列表 -->
                 <div id="stocksTab" class="tab-content">
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6 space-y-3 sm:space-y-0">
-                        <h2 class="text-lg sm:text-xl font-bold">MAG7 股票列表</h2>
+                        <h2 class="text-lg sm:text-xl font-bold">股票列表</h2>
                         <div class="flex flex-wrap gap-2 w-full sm:w-auto">
                             <button id="addStockBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors duration-200 text-sm font-medium">
                                 <i class="fas fa-plus mr-2"></i>添加股票
@@ -282,7 +282,6 @@
                                         <th class="text-left py-3 px-2 sm:px-4 text-xs sm:text-sm font-medium text-gray-400">股票代码</th>
                                         <th class="text-left py-3 px-2 sm:px-4 text-xs sm:text-sm font-medium text-gray-400">公司名称</th>
                                         <th class="text-left py-3 px-2 sm:px-4 text-xs sm:text-sm font-medium text-gray-400">类型</th>
-                                        <th class="text-left py-3 px-2 sm:px-4 text-xs sm:text-sm font-medium text-gray-400">状态</th>
                                         <th class="text-right py-3 px-2 sm:px-4 text-xs sm:text-sm font-medium text-gray-400">操作</th>
                                     </tr>
                                 </thead>
@@ -298,15 +297,28 @@
                 <div id="marketTab" class="tab-content hidden">
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6 space-y-3 sm:space-y-0">
                         <h2 class="text-lg sm:text-xl font-bold">实时市场行情</h2>
-                        <div class="flex space-x-2 w-full sm:w-auto">
-                            <button id="addMag7Btn" class="flex-1 sm:flex-none px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors duration-200 text-sm font-medium">
-                                <i class="fas fa-plus mr-2"></i>添加MAG7
-                            </button>
-                            <button id="refreshMarketBtn" class="flex-1 sm:flex-none px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors duration-200 text-sm font-medium">
-                                <i class="fas fa-sync-alt mr-2"></i>刷新
-                            </button>
+                        <button id="refreshMarketBtn" class="flex-1 sm:flex-none px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors duration-200 text-sm font-medium">
+                            <i class="fas fa-sync-alt mr-2"></i>刷新
+                        </button>
+                    </div>
+
+                    <!-- 加速度排行榜 -->
+                    <div class="bg-gradient-to-r from-orange-600 to-red-600 rounded-xl shadow-lg p-4 sm:p-6 mb-6">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-base sm:text-lg font-bold text-white">
+                                <i class="fas fa-rocket mr-2"></i>加速度 Top 10
+                            </h3>
+                            <select id="accelerationTopN" class="bg-white/20 text-white border border-white/30 rounded-lg px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white/50">
+                                <option value="5" class="text-gray-800">Top 5</option>
+                                <option value="10" selected class="text-gray-800">Top 10</option>
+                                <option value="20" class="text-gray-800">Top 20</option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-2 sm:grid-cols-5 gap-3" id="accelerationTopContainer">
+                            <!-- 动态加载 -->
                         </div>
                     </div>
+
                     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4" id="marketDataContainer">
                         <!-- 动态加载 -->
                     </div>
@@ -576,13 +588,12 @@
                                     <i class="fas fa-download mr-2"></i>立即同步
                                 </button>
                             </div>
-                            <div class="bg-purple-900 bg-opacity-30 rounded-lg p-3">
-                                <p class="text-xs text-purple-200">
-                                    <i class="fas fa-info-circle mr-1"></i>
-                                    <strong>真实模式：</strong>从您的长桥账号自选股列表中导入美股股票。<br>
-                                    <strong>模拟模式：</strong>自动添加MAG7股票（AAPL、MSFT、GOOGL、AMZN、NVDA、META、TSLA）。
-                                </p>
-                            </div>
+                        <div class="bg-purple-900 bg-opacity-30 rounded-lg p-3">
+                            <p class="text-xs text-purple-200">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                <strong>功能说明：</strong>从长桥账号自选股列表中导入美股股票到本地系统。
+                            </p>
+                        </div>
                         </div>
 
                         <div class="bg-gray-900 rounded-lg p-6">

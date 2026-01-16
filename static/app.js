@@ -177,8 +177,8 @@ function initEventListeners() {
     document.getElementById('refreshOrdersBtn').addEventListener('click', () => loadOrders());
     document.getElementById('filterOrdersBtn').addEventListener('click', () => loadOrders());
 
-    // 添加MAG7按钮
-    document.getElementById('addMag7Btn').addEventListener('click', addMag7Stocks);
+    // 加速度排行榜选择器
+    document.getElementById('accelerationTopN').addEventListener('change', loadMarketData);
 
     // 保存设置
     document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
@@ -187,7 +187,7 @@ function initEventListeners() {
     document.getElementById('syncWatchlistBtn').addEventListener('click', syncLongbridgeWatchlist);
     // 同步持仓
     document.getElementById('syncPositionsBtn').addEventListener('click', syncLongbridgePositions);
-    
+
     // 快速止盈目标输入框
     const profitTargetQuickInput = document.getElementById('profitTargetQuickInput');
     profitTargetQuickInput.addEventListener('change', async (e) => {
@@ -199,7 +199,7 @@ function initEventListeners() {
             e.target.value = '1.0';
         }
     });
-    
+
     profitTargetQuickInput.addEventListener('blur', async (e) => {
         const value = parseFloat(e.target.value);
         if (value >= 0.1 && value <= 100) {
@@ -329,15 +329,7 @@ function renderStocks(stocks) {
                             ${stock.stock_type === 'STOCK' ? '正股' : '期权'}
                         </span>
                     </td>
-                    <td class="py-3 px-2 sm:px-4">
-                        <span class="px-2 sm:px-3 py-1 rounded-full text-xs font-medium ${stock.is_active ? 'bg-green-600 text-white' : 'bg-gray-600 text-gray-300'}">
-                            ${stock.is_active ? '活跃' : '停用'}
-                        </span>
-                    </td>
                     <td class="py-3 px-2 sm:px-4 text-right">
-                        <button onclick="toggleStock(${stock.id})" class="px-2 sm:px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs mr-1 sm:mr-2 transition-colors duration-200">
-                            <i class="fas fa-toggle-${stock.is_active ? 'on' : 'off'} mr-1"></i><span class="hidden sm:inline">${stock.is_active ? '停用' : '启用'}</span>
-                        </button>
                         <button onclick="deleteStock(${stock.id})" class="px-2 sm:px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-xs transition-colors duration-200">
                             <i class="fas fa-trash mr-1"></i><span class="hidden sm:inline">删除</span>
                         </button>
@@ -347,25 +339,6 @@ function renderStocks(stocks) {
             });
         });
     });
-}
-
-// 切换股票状态
-async function toggleStock(stockId) {
-    try {
-        const response = await fetch(`${API_BASE}/api/stocks/${stockId}/toggle`, {
-            method: 'PUT',
-            credentials: 'include'
-        });
-        const result = await response.json();
-        
-        if (result.code === 0) {
-            showNotification('状态已更新', 'success');
-            await loadStocks();
-        }
-    } catch (error) {
-        console.error('切换股票状态失败:', error);
-        showNotification('操作失败', 'error');
-    }
 }
 
 // 删除股票
@@ -496,7 +469,7 @@ async function confirmAddStock() {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ symbol, name, group_name: groupName, is_active: 1 })
+            body: JSON.stringify({ symbol, name, group_name: groupName })
         });
         const result = await response.json();
 
@@ -519,6 +492,7 @@ async function loadMarketData() {
 
         if (result.code === 0) {
             renderMarketData(result.data);
+            renderAccelerationTop(result.data);
             updateAccelerationChart(result.data);
         } else {
             showNotification('加载市场数据失败', 'error');
@@ -548,11 +522,11 @@ function renderMarketData(data) {
     data.forEach(item => {
         const card = document.createElement('div');
         card.className = 'bg-gray-900 rounded-lg p-3 sm:p-4 hover:shadow-xl transition-shadow duration-200';
-        
+
         const changePctClass = item.change_pct >= 0 ? 'text-green-400' : 'text-red-400';
         const accelerationClass = item.acceleration >= 0 ? 'text-green-400' : 'text-red-400';
         const changeIcon = item.change_pct >= 0 ? 'fa-arrow-up' : 'fa-arrow-down';
-        
+
         card.innerHTML = `
             <div class="flex justify-between items-start mb-3">
                 <div>
@@ -576,7 +550,59 @@ function renderMarketData(data) {
                 </div>
             </div>
         `;
-        
+
+        container.appendChild(card);
+    });
+}
+
+// 渲染加速度排行榜
+function renderAccelerationTop(data) {
+    const container = document.getElementById('accelerationTopContainer');
+    const topN = parseInt(document.getElementById('accelerationTopN').value) || 10;
+    container.innerHTML = '';
+
+    if (!data || data.length === 0) {
+        container.innerHTML = `
+            <div class="col-span-full text-center py-8">
+                <p class="text-white/70 text-sm">暂无数据</p>
+            </div>
+        `;
+        return;
+    }
+
+    // 按加速度降序排序
+    const sortedData = [...data].sort((a, b) => b.acceleration - a.acceleration).slice(0, topN);
+
+    sortedData.forEach((item, index) => {
+        const card = document.createElement('div');
+        card.className = 'bg-white/10 rounded-lg p-3 backdrop-blur-sm hover:bg-white/20 transition-colors duration-200 cursor-pointer';
+        card.onclick = () => showStockDetail(item.symbol);
+
+        const rankColors = [
+            'text-yellow-400',
+            'text-gray-400',
+            'text-orange-400',
+            'text-white',
+            'text-white'
+        ];
+        const rankColor = rankColors[index] || 'text-white';
+        const accelerationClass = item.acceleration >= 0 ? 'text-green-400' : 'text-red-400';
+
+        card.innerHTML = `
+            <div class="flex items-center space-x-2 mb-2">
+                <span class="text-xl font-bold ${rankColor}">#${index + 1}</span>
+                <h4 class="text-sm font-bold text-white truncate flex-1">${item.symbol}</h4>
+            </div>
+            <div class="text-center">
+                <p class="text-2xl font-bold ${accelerationClass}">
+                    ${item.acceleration >= 0 ? '+' : ''}${item.acceleration.toFixed(4)}
+                </p>
+                <p class="text-xs text-white/70 mt-1">
+                    $${item.price.toFixed(2)} (${item.change_pct >= 0 ? '+' : ''}${item.change_pct.toFixed(2)}%)
+                </p>
+            </div>
+        `;
+
         container.appendChild(card);
     });
 }
@@ -1432,7 +1458,7 @@ async function loadStatistics() {
 
 // 更新活跃股票数
 function updateActiveStocksCount(stocks) {
-    const activeCount = stocks.filter(stock => stock.is_active === 1).length;
+    const activeCount = stocks.filter(stock => stock.stock_type === 'STOCK').length;
     document.getElementById('activeStocksCount').textContent = activeCount;
 }
 
@@ -1508,56 +1534,7 @@ function showNotification(message, type = 'info') {
     }, 3000);
 }
 
-// 添加MAG7股票
-async function addMag7Stocks() {
-    const mag7Stocks = [
-        ('AAPL', 'Apple Inc.'),
-        ('MSFT', 'Microsoft Corporation'),
-        ('GOOGL', 'Alphabet Inc.'),
-        ('AMZN', 'Amazon.com Inc.'),
-        ('NVDA', 'NVIDIA Corporation'),
-        ('META', 'Meta Platforms Inc.'),
-        ('TSLA', 'Tesla Inc.')
-    ];
 
-    let added = 0;
-    let skipped = 0;
-
-    for (const [symbol, name] of mag7Stocks) {
-        try {
-            const response = await fetch(`${API_BASE}/api/stocks`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ symbol, name, is_active: 1 })
-            });
-            const result = await response.json();
-
-            if (result.code === 0) {
-                added++;
-            } else if (result.message && result.message.includes('Duplicate')) {
-                skipped++;
-            }
-        } catch (error) {
-            console.error(`添加 ${symbol} 失败:`, error);
-        }
-    }
-
-    if (added > 0) {
-        showNotification(`成功添加 ${added} 只MAG7股票`, 'success');
-        await loadStocks();
-        await loadMarketData();
-        await loadStatistics();
-    } else if (skipped > 0) {
-        showNotification('MAG7股票已存在', 'info');
-    } else {
-        showNotification('添加失败', 'error');
-    }
-}
-
-// 同步长桥自选股
 async function syncLongbridgeWatchlist() {
     const btn = document.getElementById('syncWatchlistBtn');
     const originalText = btn.innerHTML;
@@ -1655,14 +1632,14 @@ async function showActiveStocksDetail() {
         const result = await response.json();
 
         if (result.code === 0) {
-            const activeStocks = result.data.filter(stock => stock.is_active === 1);
+            const activeStocks = result.data.filter(stock => stock.stock_type === 'STOCK');
 
             const content = `
                 <div class="space-y-4">
                     <div class="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg p-4">
-                        <h4 class="text-lg font-bold mb-2">活跃股票总览</h4>
+                        <h4 class="text-lg font-bold mb-2">股票总览</h4>
                         <p class="text-3xl font-bold">${activeStocks.length} 只</p>
-                        <p class="text-sm text-blue-200 mt-2">当前正在监控的股票数量</p>
+                        <p class="text-sm text-blue-200 mt-2">当前系统中的正股数量</p>
                     </div>
 
                     <div class="space-y-3">
@@ -1674,8 +1651,8 @@ async function showActiveStocksDetail() {
                                         <h5 class="text-lg font-bold text-blue-400">${stock.symbol}</h5>
                                         <p class="text-sm text-gray-400 mt-1">${stock.name}</p>
                                     </div>
-                                    <span class="px-3 py-1 bg-green-600 text-white rounded-full text-xs font-medium">
-                                        <i class="fas fa-check-circle mr-1"></i>活跃
+                                    <span class="px-3 py-1 bg-blue-600 text-white rounded-full text-xs font-medium">
+                                        正股
                                     </span>
                                 </div>
                                 <div class="mt-3 pt-3 border-t border-gray-700 flex justify-between items-center">
@@ -1685,17 +1662,17 @@ async function showActiveStocksDetail() {
                                     </p>
                                 </div>
                             </div>
-                        `).join('') : '<p class="text-center text-gray-400 py-8">暂无活跃股票</p>'}
+                        `).join('') : '<p class="text-center text-gray-400 py-8">暂无股票</p>'}
                     </div>
                 </div>
             `;
 
-            document.getElementById('detailModalTitle').innerHTML = '<i class="fas fa-chart-bar mr-2 text-blue-400"></i>活跃股票详情';
+            document.getElementById('detailModalTitle').innerHTML = '<i class="fas fa-chart-bar mr-2 text-blue-400"></i>股票详情';
             document.getElementById('detailModalContent').innerHTML = content;
             document.getElementById('detailModal').classList.remove('hidden');
         }
     } catch (error) {
-        console.error('加载活跃股票详情失败:', error);
+        console.error('加载股票详情失败:', error);
         showNotification('加载详情失败', 'error');
     }
 }
@@ -2031,9 +2008,8 @@ async function showStockDetail(symbol) {
                             <h2 class="text-3xl sm:text-4xl font-bold mb-2">${stock.symbol}</h2>
                             <p class="text-blue-200 text-lg">${stock.name}</p>
                         </div>
-                        <span class="px-4 py-2 ${stock.is_active ? 'bg-green-500' : 'bg-gray-600'} rounded-full text-sm font-medium">
-                            <i class="fas fa-${stock.is_active ? 'check-circle' : 'pause-circle'} mr-1"></i>
-                            ${stock.is_active ? '监控中' : '已停用'}
+                        <span class="px-4 py-2 bg-blue-600 rounded-full text-sm font-medium">
+                            <i class="fas fa-chart-line mr-1"></i>正股
                         </span>
                     </div>
                 </div>
@@ -2224,11 +2200,8 @@ async function showStockDetail(symbol) {
                             <span class="text-white font-medium">${stock.name}</span>
                         </div>
                         <div class="flex justify-between">
-                            <span class="text-gray-400">监控状态:</span>
-                            <span class="${stock.is_active ? 'text-green-400' : 'text-gray-400'} font-medium">
-                                <i class="fas fa-${stock.is_active ? 'check-circle' : 'pause-circle'} mr-1"></i>
-                                ${stock.is_active ? '活跃' : '停用'}
-                            </span>
+                            <span class="text-gray-400">股票类型:</span>
+                            <span class="text-white font-medium">${stock.stock_type === 'STOCK' ? '正股' : '期权'}</span>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-gray-400">添加时间:</span>
