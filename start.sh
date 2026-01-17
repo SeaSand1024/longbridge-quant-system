@@ -150,8 +150,16 @@ start_new_process() {
     # 清空旧日志
     > "$LOG_FILE"
 
+    # 检查是否使用模块化版本
+    if [ "$USE_NEW" = "1" ] && [ -f "main_new.py" ]; then
+        log_info "使用模块化版本 (main_new.py)"
+        MAIN_FILE="main_new.py"
+    else
+        MAIN_FILE="main.py"
+    fi
+
     # 启动服务 (后台运行)
-    nohup "$VENV_DIR/bin/python" main.py >> "$LOG_FILE" 2>&1 &
+    nohup "$VENV_DIR/bin/python" "$MAIN_FILE" >> "$LOG_FILE" 2>&1 &
     NEW_PID=$!
 
     # 保存PID

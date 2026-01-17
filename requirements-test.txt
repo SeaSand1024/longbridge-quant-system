@@ -1,0 +1,25 @@
+# 测试框架依赖
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-html>=3.2.0
+pytest-cov>=4.1.0
+pytest-xdist>=3.3.0
+
+# API测试
+httpx>=0.24.0
+requests>=2.31.0
+
+# 前端测试
+selenium>=4.11.0
+webdriver-manager>=3.9.0
+
+# 数据库测试
+pytest-mysql>=2.3.0
+
+# 测试数据生成
+factory-boy>=3.3.0
+faker>=19.3.0
+
+# 测试工具
+freezegun>=1.2.0
+responses>=0.23.0

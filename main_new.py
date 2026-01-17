@@ -1,46 +1,43 @@
 """
-美股量化交易系统 - 主入口
+美股量化交易系统 - 主入口文件
+模块化重构版本
 """
-import asyncio
-import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+import logging
+import pymysql
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 导入配置和服务
-from app.config.settings import (
-    LONGBRIDGE_CONFIG, ensure_default_system_configs
-)
-from app.config.database import get_db_connection
-
-# 导入服务
-from app.services.longbridge_sdk import LongBridgeSDK, longbridge_sdk
-from app.services.task_queue import task_queue
-from app.services.smart_trader import smart_trader
-from app.services.trading_strategy import trading_strategy
-
-# 导入路由
-from app.routers import (
-    auth_router, stocks_router, trades_router,
-    positions_router, config_router, monitoring_router,
-    smart_trade_router, longbridge_router, market_data_router
-)
-
 # 创建FastAPI应用
-app = FastAPI(title="美股量化交易系统")
+app = FastAPI(
+    title="美股量化交易系统",
+    description="基于长桥SDK的量化交易系统，支持智能预测和自动交易",
+    version="2.0.0"
+)
 
-# 配置CORS
+# CORS配置
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# 导入配置
+from app.config.settings import LONGBRIDGE_CONFIG
+from app.config.database import get_db_connection
+
+# 导入路由
+from app.routers import (
+    auth_router, stocks_router, trades_router, 
+    positions_router, config_router, monitoring_router,
+    smart_trade_router, longbridge_router, market_data_router
 )
 
 # 注册路由
@@ -54,54 +51,19 @@ app.include_router(smart_trade_router)
 app.include_router(longbridge_router)
 app.include_router(market_data_router)
 
+# 静态文件
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 @app.get("/")
 async def root():
-    """根路径重定向到静态页面"""
+    """根路由，重定向到静态页面"""
     return RedirectResponse(url="/static/index.html")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """启动事件"""
-    # 确保系统配置存在默认值
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        inserted = ensure_default_system_configs(cursor)
-        if inserted:
-            conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.warning(f"初始化系统配置失败: {e}")
-
-    # 加载长桥配置
-    _load_longbridge_config()
-
-    # 初始化SDK
-    from app.services import longbridge_sdk as sdk_module
-    sdk_module.longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
-    await sdk_module.longbridge_sdk.connect()
-
-    # 启动异步任务队列
-    await task_queue.start()
-    
-    logger.info("系统启动完成")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """关闭事件"""
-    # 停止任务队列
-    await task_queue.stop()
-    logger.info("系统已关闭")
 
 
 def _load_longbridge_config():
     """从数据库加载长桥配置"""
     try:
-        import pymysql.cursors
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
         cursor.execute("""
@@ -137,18 +99,47 @@ def _load_longbridge_config():
         logger.warning(f"从数据库加载长桥配置失败: {str(e)}")
 
 
-# 挂载静态文件（必须在最后）
-app.mount("/static", StaticFiles(directory="static", html=True), name="static")
+@app.on_event("startup")
+async def startup_event():
+    """应用启动事件"""
+    logger.info("=" * 50)
+    logger.info("美股量化交易系统启动中...")
+    logger.info("=" * 50)
+    
+    # 加载长桥配置（从system_config表）
+    _load_longbridge_config()
+    
+    # 连接长桥SDK
+    from app.services.longbridge_sdk import longbridge_sdk
+    await longbridge_sdk.connect()
+    
+    # 启动任务队列
+    from app.services.task_queue import task_queue
+    await task_queue.start()
+    
+    # 加载交易策略配置
+    from app.services.trading_strategy import trading_strategy
+    await trading_strategy.load_config()
+    
+    # 加载智能交易配置
+    from app.services.smart_trader import smart_trader
+    await smart_trader.load_config()
+    
+    logger.info("系统启动完成!")
+    logger.info(f"访问地址: http://localhost:8000")
 
 
-# 启动入口
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭事件"""
+    logger.info("系统正在关闭...")
+    
+    from app.services.task_queue import task_queue
+    await task_queue.stop()
+    
+    logger.info("系统已关闭")
+
+
 if __name__ == "__main__":
     import uvicorn
-    
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run("main_new:app", host="0.0.0.0", port=8000, reload=True)

@@ -206,6 +206,9 @@ function initEventListeners() {
             await updateProfitTarget(value);
         }
     });
+    
+    // 初始化智能交易事件
+    initSmartTradeEvents();
 }
 
 // 加载初始数据
@@ -850,7 +853,9 @@ function updateAccelerationChart(data) {
         // 如果是分组格式（新格式）
         try {
             Object.values(data).forEach(group => {
-                if (group && group.stocks && Array.isArray(group.stocks)) {
+                if (Array.isArray(group)) {
+                    flatData = flatData.concat(group.filter(stock => stock && stock.price !== null));
+                } else if (group && group.stocks && Array.isArray(group.stocks)) {
                     flatData = flatData.concat(group.stocks.filter(stock => stock && stock.price !== null));
                 }
             });
@@ -1277,12 +1282,372 @@ async function loadSettings() {
             if (lbResult.code === 0) {
                 const lbConfig = lbResult.data;
                 updateLongBridgeStatus(lbConfig);
+                
+                // 如果已配置，自动填充输入框（显示脱敏后的值）
+                if (lbConfig.is_configured) {
+                    const appKeyInput = document.getElementById('appKeyInput');
+                    if (appKeyInput && lbConfig.app_key) {
+                        appKeyInput.value = lbConfig.app_key;
+                        appKeyInput.placeholder = '已配置（如需修改请重新输入）';
+                    }
+                    const appSecretInput = document.getElementById('appSecretInput');
+                    if (appSecretInput && lbConfig.has_secret) {
+                        appSecretInput.placeholder = '已配置（如需修改请重新输入）';
+                    }
+                    const accessTokenInput = document.getElementById('accessTokenInput');
+                    if (accessTokenInput && lbConfig.has_token) {
+                        accessTokenInput.placeholder = '已配置（如需修改请重新输入）';
+                    }
+                }
             }
         } catch (lbError) {
             console.error('加载长桥配置失败:', lbError);
         }
+        
+        // 加载智能交易配置
+        await loadSmartTradeSettings();
     } catch (error) {
         console.error('加载设置失败:', error);
+    }
+}
+
+// ==================== 智能交易功能 ====================
+
+// 加载智能交易设置
+async function loadSmartTradeSettings() {
+    try {
+        const response = await fetch(`${API_BASE}/api/smart-trade/status`, { credentials: 'include' });
+        const result = await response.json();
+        
+        if (result.code === 0 && result.data) {
+            const { status, today_predictions, today_stats } = result.data;
+            
+            // 更新开关状态
+            const enabledCheckbox = document.getElementById('smartTradeEnabled');
+            const statusText = document.getElementById('smartTradeStatusText');
+            if (enabledCheckbox) {
+                enabledCheckbox.checked = status.enabled;
+                statusText.textContent = status.enabled ? '已启用' : '已关闭';
+            }
+            
+            // 更新配置表单
+            document.getElementById('smartMaxDailyTrades').value = status.max_daily_trades || 3;
+            document.getElementById('smartBuyAmount').value = status.buy_amount || 200000;
+            document.getElementById('smartMinScore').value = status.min_prediction_score || 60;
+            document.getElementById('smartBaseProfit').value = status.base_profit_target || 1.0;
+            document.getElementById('smartTrailingStop').value = status.trailing_stop || 0.5;
+            document.getElementById('smartMaxHoldDays').value = status.max_hold_days || 5;
+            document.getElementById('smartDynamicStop').checked = status.dynamic_stop_profit !== false;
+            
+            // 更新LLM配置
+            const llmEnabled = document.getElementById('llmEnabled');
+            if (llmEnabled) {
+                llmEnabled.checked = status.llm_enabled || false;
+            }
+            const llmProvider = document.getElementById('llmProvider');
+            if (llmProvider) {
+                llmProvider.value = status.llm_provider || 'openai';
+            }
+            const llmApiBase = document.getElementById('llmApiBase');
+            if (llmApiBase) {
+                llmApiBase.value = status.llm_api_base || 'https://api.openai.com/v1';
+            }
+            const llmModel = document.getElementById('llmModel');
+            if (llmModel) {
+                llmModel.value = status.llm_model || 'gpt-4o-mini';
+            }
+            const llmWeight = document.getElementById('llmWeight');
+            if (llmWeight) {
+                llmWeight.value = status.llm_weight || 0.3;
+                const weightValue = document.getElementById('llmWeightValue');
+                if (weightValue) {
+                    weightValue.textContent = status.llm_weight || 0.3;
+                }
+            }
+            
+            // 显示LLM配置状态
+            updateLlmConfigStatus(status.llm_enabled, status.llm_configured);
+            
+            // 显示今日预测结果
+            if (today_predictions && today_predictions.length > 0) {
+                displayPredictionResults(today_predictions);
+            }
+        }
+    } catch (error) {
+        console.error('加载智能交易设置失败:', error);
+    }
+}
+
+// 更新LLM配置状态显示
+function updateLlmConfigStatus(enabled, configured) {
+    const section = document.getElementById('llmConfigSection');
+    if (section) {
+        section.style.opacity = enabled ? '1' : '0.5';
+    }
+}
+
+// 显示预测结果
+function displayPredictionResults(predictions) {
+    const section = document.getElementById('predictionResultsSection');
+    const container = document.getElementById('predictionResults');
+    
+    if (!predictions || predictions.length === 0) {
+        section.classList.add('hidden');
+        return;
+    }
+    
+    section.classList.remove('hidden');
+    container.innerHTML = '';
+    
+    predictions.forEach((pred, index) => {
+        const scoreColor = pred.technical_score >= 70 ? 'text-green-400' : 
+                          pred.technical_score >= 50 ? 'text-yellow-400' : 'text-red-400';
+        const rankColor = index < 3 ? 'text-yellow-400' : 'text-gray-400';
+        
+        // LLM建议标签
+        let llmBadge = '';
+        if (pred.llm_recommendation) {
+            const badgeColor = pred.llm_recommendation === 'buy' ? 'bg-green-600' : 
+                              pred.llm_recommendation === 'sell' ? 'bg-red-600' : 'bg-gray-600';
+            const badgeText = pred.llm_recommendation === 'buy' ? '买入' : 
+                             pred.llm_recommendation === 'sell' ? '卖出' : '持有';
+            llmBadge = `<span class="ml-2 px-2 py-0.5 ${badgeColor} rounded text-xs">AI:${badgeText}</span>`;
+        }
+        
+        // LLM得分显示
+        let llmScoreHtml = '';
+        if (pred.llm_score !== null && pred.llm_score !== undefined) {
+            const llmScoreColor = pred.llm_score >= 70 ? 'text-pink-400' : 
+                                 pred.llm_score >= 50 ? 'text-pink-300' : 'text-pink-200';
+            llmScoreHtml = `
+                <div class="text-right">
+                    <div class="text-xs text-gray-400">AI得分</div>
+                    <div class="${llmScoreColor} font-bold">${pred.llm_score?.toFixed(1) || '--'}</div>
+                </div>
+            `;
+        }
+        
+        const item = document.createElement('div');
+        item.className = 'flex items-center justify-between p-3 bg-gray-800 rounded-lg hover:bg-gray-750 transition-colors';
+        item.innerHTML = `
+            <div class="flex items-center space-x-3">
+                <span class="text-lg font-bold ${rankColor}">#${index + 1}</span>
+                <div>
+                    <span class="font-medium">${pred.symbol}</span>
+                    ${llmBadge}
+                    <span class="text-xs text-gray-400 ml-2">${pred.stock_name || ''}</span>
+                </div>
+            </div>
+            <div class="flex items-center space-x-4">
+                <div class="text-right">
+                    <div class="text-xs text-gray-400">技术得分</div>
+                    <div class="${scoreColor} font-bold">${pred.technical_score?.toFixed(1) || '--'}</div>
+                </div>
+                ${llmScoreHtml}
+                <div class="text-right">
+                    <div class="text-xs text-gray-400">预测收益</div>
+                    <div class="${pred.predicted_return >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">
+                        ${pred.predicted_return >= 0 ? '+' : ''}${(pred.predicted_return * 100)?.toFixed(2) || '--'}%
+                    </div>
+                </div>
+                ${pred.actual_return !== null ? `
+                <div class="text-right">
+                    <div class="text-xs text-gray-400">实际收益</div>
+                    <div class="${pred.actual_return >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">
+                        ${pred.actual_return >= 0 ? '+' : ''}${pred.actual_return?.toFixed(2) || '--'}%
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+        `;
+        
+        // 如果有LLM分析，添加可展开的详情
+        if (pred.llm_analysis) {
+            item.classList.add('cursor-pointer');
+            item.title = '点击查看AI分析';
+            item.onclick = () => {
+                showNotification(`AI分析: ${pred.llm_analysis}`, 'info', 5000);
+            };
+        }
+        
+        container.appendChild(item);
+    });
+}
+
+// 保存智能交易设置
+async function saveSmartTradeSettings() {
+    const config = {
+        enabled: document.getElementById('smartTradeEnabled').checked,
+        max_daily_trades: parseInt(document.getElementById('smartMaxDailyTrades').value) || 3,
+        buy_amount: parseFloat(document.getElementById('smartBuyAmount').value) || 200000,
+        min_score: parseFloat(document.getElementById('smartMinScore').value) || 60,
+        base_profit: parseFloat(document.getElementById('smartBaseProfit').value) || 1.0,
+        trailing_stop: parseFloat(document.getElementById('smartTrailingStop').value) || 0.5,
+        max_hold_days: parseInt(document.getElementById('smartMaxHoldDays').value) || 5,
+        dynamic_stop: document.getElementById('smartDynamicStop').checked,
+        // LLM配置
+        llm_enabled: document.getElementById('llmEnabled')?.checked || false,
+        llm_provider: document.getElementById('llmProvider')?.value || 'openai',
+        llm_api_base: document.getElementById('llmApiBase')?.value || 'https://api.openai.com/v1',
+        llm_api_key: document.getElementById('llmApiKey')?.value || '',
+        llm_model: document.getElementById('llmModel')?.value || 'gpt-4o-mini',
+        llm_weight: parseFloat(document.getElementById('llmWeight')?.value) || 0.3
+    };
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/smart-trade/config`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        });
+        
+        const result = await response.json();
+        
+        if (result.code === 0) {
+            showNotification('智能交易配置已保存', 'success');
+            // 更新状态文字
+            document.getElementById('smartTradeStatusText').textContent = config.enabled ? '已启用' : '已关闭';
+            // 更新LLM状态
+            updateLlmConfigStatus(config.llm_enabled, !!config.llm_api_key);
+        } else {
+            showNotification('保存失败: ' + (result.message || '未知错误'), 'error');
+        }
+    } catch (error) {
+        console.error('保存智能交易设置失败:', error);
+        showNotification('保存失败', 'error');
+    }
+}
+
+// 运行预测
+async function runPrediction() {
+    try {
+        showNotification('正在运行股票预测...', 'info');
+        
+        const response = await fetch(`${API_BASE}/api/smart-trade/run-prediction`, {
+            method: 'POST',
+            credentials: 'include'
+        });
+        
+        const result = await response.json();
+        
+        if (result.code === 0) {
+            showNotification(`预测完成，共分析${result.data.total}只股票`, 'success');
+            displayPredictionResults(result.data.predictions);
+        } else {
+            showNotification('预测失败: ' + (result.message || '未知错误'), 'error');
+        }
+    } catch (error) {
+        console.error('运行预测失败:', error);
+        showNotification('运行预测失败', 'error');
+    }
+}
+
+// 手动执行智能买入
+async function executeSmartBuy() {
+    if (!confirm('确定要立即执行智能买入吗？系统将根据预测结果买入最优股票。')) {
+        return;
+    }
+    
+    try {
+        showNotification('正在执行智能买入...', 'info');
+        
+        const response = await fetch(`${API_BASE}/api/smart-trade/execute-buy`, {
+            method: 'POST',
+            credentials: 'include'
+        });
+        
+        const result = await response.json();
+        
+        if (result.code === 0) {
+            showNotification('智能买入执行完成', 'success');
+            // 刷新数据
+            loadPositions();
+            loadTrades();
+            loadStatistics();
+        } else {
+            showNotification(result.message || '执行失败', 'error');
+        }
+    } catch (error) {
+        console.error('执行智能买入失败:', error);
+        showNotification('执行失败', 'error');
+    }
+}
+
+// 初始化智能交易事件监听
+function initSmartTradeEvents() {
+    // 保存配置按钮
+    const saveBtn = document.getElementById('saveSmartTradeBtn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', saveSmartTradeSettings);
+    }
+    
+    // 运行预测按钮
+    const predictionBtn = document.getElementById('runPredictionBtn');
+    if (predictionBtn) {
+        predictionBtn.addEventListener('click', runPrediction);
+    }
+    
+    // 手动买入按钮
+    const buyBtn = document.getElementById('manualSmartBuyBtn');
+    if (buyBtn) {
+        buyBtn.addEventListener('click', executeSmartBuy);
+    }
+    
+    // 开关切换
+    const enabledCheckbox = document.getElementById('smartTradeEnabled');
+    if (enabledCheckbox) {
+        enabledCheckbox.addEventListener('change', function() {
+            document.getElementById('smartTradeStatusText').textContent = this.checked ? '已启用' : '已关闭';
+        });
+    }
+    
+    // LLM权重滑块
+    const llmWeight = document.getElementById('llmWeight');
+    if (llmWeight) {
+        llmWeight.addEventListener('input', function() {
+            const weightValue = document.getElementById('llmWeightValue');
+            if (weightValue) {
+                weightValue.textContent = this.value;
+            }
+        });
+    }
+    
+    // LLM启用开关
+    const llmEnabled = document.getElementById('llmEnabled');
+    if (llmEnabled) {
+        llmEnabled.addEventListener('change', function() {
+            updateLlmConfigStatus(this.checked, true);
+        });
+    }
+    
+    // LLM提供商切换时自动更新API Base
+    const llmProvider = document.getElementById('llmProvider');
+    if (llmProvider) {
+        llmProvider.addEventListener('change', function() {
+            const apiBase = document.getElementById('llmApiBase');
+            const model = document.getElementById('llmModel');
+            if (apiBase && model) {
+                switch(this.value) {
+                    case 'openai':
+                        apiBase.value = 'https://api.openai.com/v1';
+                        model.value = 'gpt-4o-mini';
+                        break;
+                    case 'deepseek':
+                        apiBase.value = 'https://api.deepseek.com/v1';
+                        model.value = 'deepseek-chat';
+                        break;
+                    case 'zhipu':
+                        apiBase.value = 'https://open.bigmodel.cn/api/paas/v4';
+                        model.value = 'glm-4-flash';
+                        break;
+                    case 'ollama':
+                        apiBase.value = 'http://localhost:11434/v1';
+                        model.value = 'llama3';
+                        break;
+                }
+            }
+        });
     }
 }
 
@@ -1400,6 +1765,7 @@ async function saveSettings() {
 // 更新长桥SDK状态显示
 function updateLongBridgeStatus(config) {
     const settingsTab = document.getElementById('settingsTab');
+    const longbridgeConfigSection = document.getElementById('longbridgeConfigSection');
 
     // 查找或创建状态显示区域
     let statusDiv = settingsTab.querySelector('.longbridge-status');
@@ -1408,9 +1774,8 @@ function updateLongBridgeStatus(config) {
         statusDiv.className = 'longbridge-status bg-gray-900 rounded-lg p-4 mb-4';
 
         // 插入到长桥配置区域之前
-        const lbConfigDiv = settingsTab.querySelector('.bg-gray-900.rounded-lg.p-6:nth-child(2)');
-        if (lbConfigDiv) {
-            lbConfigDiv.parentNode.insertBefore(statusDiv, lbConfigDiv);
+        if (longbridgeConfigSection) {
+            longbridgeConfigSection.parentNode.insertBefore(statusDiv, longbridgeConfigSection);
         }
     }
 
@@ -1968,6 +2333,28 @@ async function showTodayTradesDetail() {
     }
 }
 
+// 将市场数据（分组或数组）扁平化
+function flattenMarketData(data) {
+    if (!data) return [];
+    if (Array.isArray(data)) return data;
+    if (typeof data === 'object') {
+        let flat = [];
+        try {
+            Object.values(data).forEach(group => {
+                if (Array.isArray(group)) {
+                    flat = flat.concat(group);
+                } else if (group && group.stocks && Array.isArray(group.stocks)) {
+                    flat = flat.concat(group.stocks);
+                }
+            });
+        } catch (e) {
+            console.error('flattenMarketData error:', e);
+        }
+        return flat;
+    }
+    return [];
+}
+
 // 显示当前持仓详情
 async function showCurrentPositionDetail() {
     try {
@@ -1990,7 +2377,8 @@ async function showCurrentPositionDetail() {
             
             if (currentPositionData) {
                 // 获取当前市场价格
-                const marketData = marketResult.code === 0 ? marketResult.data.find(m => m.symbol === currentPosition) : null;
+                const marketFlat = flattenMarketData(marketResult.code === 0 ? marketResult.data : []);
+                const marketData = marketFlat.find(m => m.symbol === currentPosition);
                 const currentPrice = marketData ? marketData.price : currentPositionData.current_price;
                 const profitLoss = currentPrice ? (currentPrice - currentPositionData.buy_price) * currentPositionData.quantity : 0;
                 const profitLossPct = currentPrice ? ((currentPrice - currentPositionData.buy_price) / currentPositionData.buy_price * 100) : 0;
@@ -2169,7 +2557,8 @@ async function showStockDetail(symbol) {
 
         // 查找股票信息
         const stock = stocksResult.code === 0 ? stocksResult.data.find(s => s.symbol === symbol) : null;
-        const marketData = marketResult.code === 0 ? marketResult.data.find(m => m.symbol === symbol) : null;
+        const marketFlat = flattenMarketData(marketResult.code === 0 ? marketResult.data : []);
+        const marketData = marketFlat.find(m => m.symbol === symbol);
         const position = positionsResult.code === 0 ? positionsResult.data.find(p => p.symbol === symbol) : null;
         const stockTrades = tradesResult.code === 0 ? tradesResult.data.filter(t => t.symbol === symbol) : [];
 
