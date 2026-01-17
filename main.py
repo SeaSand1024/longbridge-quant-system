@@ -2254,38 +2254,76 @@ async def toggle_stock(stock_id: int, current_user: dict = Depends(get_current_u
 @async_performance_monitor("获取市场数据")
 @app.get("/api/market-data")
 async def get_market_data(current_user: dict = Depends(get_current_user)):
-    """获取实时市场数据"""
+    """获取实时市场数据（按分组组织）"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
-        # 查询所有正股
-        cursor.execute("SELECT symbol FROM stocks WHERE stock_type = 'STOCK'")
+        # 查询所有正股，包含分组信息
+        cursor.execute("""
+            SELECT symbol, group_name, group_order, name 
+            FROM stocks 
+            WHERE stock_type = 'STOCK' AND is_active = 1
+            ORDER BY group_order ASC, group_name ASC, symbol ASC
+        """)
         stocks = cursor.fetchall()
         cursor.close()
         conn.close()
 
         if not stocks:
-            return {"code": 0, "data": []}
+            return {"code": 0, "data": {}}
 
         symbols = [stock['symbol'] for stock in stocks]
         quotes = await longbridge_sdk.get_realtime_quote(symbols)
+        
+        # 创建symbol到quote的映射
+        quote_map = {quote['symbol']: quote for quote in quotes}
 
-        market_data = []
-        for quote in quotes:
-            symbol = quote['symbol']
-            acceleration_calculator.update_price(symbol, quote['price'], quote['change_pct'])
-            acceleration = acceleration_calculator.calculate_acceleration(symbol)
+        # 按分组组织数据
+        grouped_data = {}
+        for stock in stocks:
+            symbol = stock['symbol']
+            group_name = stock['group_name'] or '未分组'
+            
+            if group_name not in grouped_data:
+                grouped_data[group_name] = {
+                    'group_name': group_name,
+                    'group_order': stock['group_order'] or 999,
+                    'stocks': []
+                }
+            
+            # 获取实时行情数据
+            if symbol in quote_map:
+                quote = quote_map[symbol]
+                acceleration_calculator.update_price(symbol, quote['price'], quote['change_pct'])
+                acceleration = acceleration_calculator.calculate_acceleration(symbol)
 
-            market_data.append({
-                'symbol': symbol,
-                'price': quote['price'],
-                'change_pct': quote['change_pct'],
-                'acceleration': acceleration,
-                'volume': quote['volume'],
-                'timestamp': quote['timestamp']
-            })
+                stock_data = {
+                    'symbol': symbol,
+                    'name': stock['name'],
+                    'price': quote['price'],
+                    'change_pct': quote['change_pct'],
+                    'acceleration': acceleration,
+                    'volume': quote['volume'],
+                    'timestamp': quote['timestamp']
+                }
+            else:
+                # 如果没有行情数据，显示基本信息
+                stock_data = {
+                    'symbol': symbol,
+                    'name': stock['name'],
+                    'price': None,
+                    'change_pct': None,
+                    'acceleration': None,
+                    'volume': None,
+                    'timestamp': None
+                }
+            
+            grouped_data[group_name]['stocks'].append(stock_data)
 
-        return {"code": 0, "data": market_data}
+        # 按group_order排序分组
+        sorted_groups = dict(sorted(grouped_data.items(), key=lambda x: x[1]['group_order']))
+        
+        return {"code": 0, "data": sorted_groups}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

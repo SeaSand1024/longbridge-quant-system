@@ -491,11 +491,13 @@ async function loadMarketData() {
         const result = await response.json();
 
         if (result.code === 0) {
-            renderMarketData(result.data);
-            renderAccelerationTop(result.data);
-            updateAccelerationChart(result.data);
+            // 确保 data 存在，如果不存在则使用空对象
+            const data = result.data || {};
+            renderMarketData(data);
+            renderAccelerationTop(data);
+            updateAccelerationChart(data);
         } else {
-            showNotification('加载市场数据失败', 'error');
+            showNotification('加载市场数据失败: ' + (result.message || '未知错误'), 'error');
         }
     } catch (error) {
         console.error('加载市场数据失败:', error);
@@ -503,12 +505,13 @@ async function loadMarketData() {
     }
 }
 
-// 渲染市场数据
-function renderMarketData(data) {
+// 渲染市场数据（按分组展示）
+function renderMarketData(groupedData) {
     const container = document.getElementById('marketDataContainer');
     container.innerHTML = '';
 
-    if (!data || data.length === 0) {
+    // 检查数据格式
+    if (!groupedData) {
         container.innerHTML = `
             <div class="col-span-full text-center py-12">
                 <i class="fas fa-chart-line text-6xl text-gray-600 mb-4"></i>
@@ -519,49 +522,209 @@ function renderMarketData(data) {
         return;
     }
 
-    data.forEach(item => {
-        const card = document.createElement('div');
-        card.className = 'bg-gray-900 rounded-lg p-3 sm:p-4 hover:shadow-xl transition-shadow duration-200';
+    // 如果数据是数组格式（旧格式），转换为分组格式
+    if (Array.isArray(groupedData)) {
+        const convertedData = {
+            '未分组': {
+                group_name: '未分组',
+                group_order: 0,
+                stocks: groupedData
+            }
+        };
+        groupedData = convertedData;
+    }
 
-        const changePctClass = item.change_pct >= 0 ? 'text-green-400' : 'text-red-400';
-        const accelerationClass = item.acceleration >= 0 ? 'text-green-400' : 'text-red-400';
-        const changeIcon = item.change_pct >= 0 ? 'fa-arrow-up' : 'fa-arrow-down';
-
-        card.innerHTML = `
-            <div class="flex justify-between items-start mb-3">
-                <div>
-                    <h3 class="text-base sm:text-lg font-bold">${item.symbol}</h3>
-                    <p class="text-xl sm:text-2xl font-bold mt-1">$${item && item.price ? item.price.toFixed(2) : '--'}</p>
-                </div>
-                <i class="fas ${changeIcon} ${changePctClass} text-lg sm:text-xl"></i>
+    if (typeof groupedData !== 'object' || Object.keys(groupedData).length === 0) {
+        container.innerHTML = `
+            <div class="col-span-full text-center py-12">
+                <i class="fas fa-chart-line text-6xl text-gray-600 mb-4"></i>
+                <p class="text-gray-400 text-lg">暂无市场数据</p>
+                <p class="text-gray-500 text-sm mt-2">请确保有活跃的股票，并启动监控以获取实时行情</p>
             </div>
-            <div class="space-y-2 text-xs sm:text-sm">
-                <div class="flex justify-between">
-                    <span class="text-gray-400">涨跌幅:</span>
-                    <span class="${changePctClass} font-medium">${item && item.change_pct >= 0 ? '+' : ''}${item && item.change_pct ? item.change_pct.toFixed(2) : '--'}%</span>
-                </div>
-                <div class="flex justify-between">
-                    <span class="text-gray-400">加速度:</span>
-                    <span class="${accelerationClass} font-medium">${item && item.acceleration >= 0 ? '+' : ''}${item && item.acceleration ? item.acceleration.toFixed(4) : '--'}</span>
-                </div>
-                <div class="flex justify-between">
-                    <span class="text-gray-400">成交量:</span>
-                    <span class="text-white">${item && item.volume ? formatNumber(item.volume) : '--'}</span>
-                </div>
+        `;
+        return;
+    }
+
+    // 为每个分组创建容器
+    Object.entries(groupedData).forEach(([groupName, groupInfo]) => {
+        if (!groupInfo || !groupInfo.stocks || groupInfo.stocks.length === 0) {
+            return;
+        }
+
+        // 创建分组容器
+        const groupContainer = document.createElement('div');
+        groupContainer.className = 'col-span-full mb-6';
+        
+        // 分组标题
+        const groupHeader = document.createElement('div');
+        groupHeader.className = 'flex items-center justify-between mb-4 cursor-pointer group-header';
+        groupHeader.setAttribute('data-group', groupName);
+        
+        const stockCount = groupInfo.stocks.length;
+        const activeStocks = groupInfo.stocks.filter(stock => stock.price !== null).length;
+        
+        groupHeader.innerHTML = `
+            <div class="flex items-center">
+                <i class="fas fa-chevron-down text-blue-400 mr-2 transition-transform duration-200 group-toggle-icon"></i>
+                <h3 class="text-lg font-bold text-white">${groupName}</h3>
+                <span class="ml-2 text-sm text-gray-400">(${activeStocks}/${stockCount})</span>
+            </div>
+            <div class="text-sm text-gray-400">
+                点击展开/收起
             </div>
         `;
 
-        container.appendChild(card);
+        // 股票网格容器
+        const stocksGrid = document.createElement('div');
+        stocksGrid.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 group-stocks';
+        stocksGrid.setAttribute('data-group', groupName);
+
+        // 渲染分组内的股票
+        groupInfo.stocks.forEach(stock => {
+            const card = document.createElement('div');
+            card.className = 'bg-gray-900 rounded-lg p-3 sm:p-4 hover:shadow-xl transition-shadow duration-200';
+
+            if (stock.price !== null) {
+                const changePctClass = stock.change_pct >= 0 ? 'text-green-400' : 'text-red-400';
+                const accelerationClass = stock.acceleration >= 0 ? 'text-green-400' : 'text-red-400';
+                const changeIcon = stock.change_pct >= 0 ? 'fa-arrow-up' : 'fa-arrow-down';
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <h3 class="text-base sm:text-lg font-bold">${stock.symbol}</h3>
+                            <p class="text-xs text-gray-400 truncate">${stock.name || ''}</p>
+                            <p class="text-xl sm:text-2xl font-bold mt-1">$${stock.price.toFixed(2)}</p>
+                        </div>
+                        <i class="fas ${changeIcon} ${changePctClass} text-lg sm:text-xl"></i>
+                    </div>
+                    <div class="space-y-2">
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-400 text-sm">涨跌幅</span>
+                            <span class="${changePctClass} font-semibold">${stock.change_pct >= 0 ? '+' : ''}${stock.change_pct.toFixed(2)}%</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-400 text-sm">加速度</span>
+                            <span class="${accelerationClass} font-semibold">${stock.acceleration ? stock.acceleration.toFixed(4) : '--'}</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-400 text-sm">成交量</span>
+                            <span class="text-white text-sm">${stock.volume ? formatVolume(stock.volume) : '--'}</span>
+                        </div>
+                    </div>
+                `;
+            } else {
+                // 无行情数据的股票
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <h3 class="text-base sm:text-lg font-bold">${stock.symbol}</h3>
+                            <p class="text-xs text-gray-400 truncate">${stock.name || ''}</p>
+                            <p class="text-xl sm:text-2xl font-bold mt-1 text-gray-500">--</p>
+                        </div>
+                        <i class="fas fa-pause text-gray-500 text-lg sm:text-xl"></i>
+                    </div>
+                    <div class="space-y-2">
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-400 text-sm">涨跌幅</span>
+                            <span class="text-gray-500 font-semibold">--</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-400 text-sm">加速度</span>
+                            <span class="text-gray-500 font-semibold">--</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-400 text-sm">状态</span>
+                            <span class="text-gray-500 text-sm">无数据</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            stocksGrid.appendChild(card);
+        });
+
+        groupContainer.appendChild(groupHeader);
+        groupContainer.appendChild(stocksGrid);
+        container.appendChild(groupContainer);
+    });
+
+    // 添加分组展开/收起功能
+    addGroupToggleListeners();
+}
+
+// 添加分组展开/收起监听器
+function addGroupToggleListeners() {
+    document.querySelectorAll('.group-header').forEach(header => {
+        header.addEventListener('click', function() {
+            const groupName = this.getAttribute('data-group');
+            const stocksGrid = document.querySelector(`.group-stocks[data-group="${groupName}"]`);
+            const toggleIcon = this.querySelector('.group-toggle-icon');
+            
+            if (stocksGrid.style.display === 'none') {
+                stocksGrid.style.display = 'grid';
+                toggleIcon.style.transform = 'rotate(0deg)';
+                localStorage.setItem(`group-${groupName}-collapsed`, 'false');
+            } else {
+                stocksGrid.style.display = 'none';
+                toggleIcon.style.transform = 'rotate(-90deg)';
+                localStorage.setItem(`group-${groupName}-collapsed`, 'true');
+            }
+        });
+        
+        // 恢复之前的展开/收起状态
+        const groupName = header.getAttribute('data-group');
+        const isCollapsed = localStorage.getItem(`group-${groupName}-collapsed`) === 'true';
+        if (isCollapsed) {
+            const stocksGrid = document.querySelector(`.group-stocks[data-group="${groupName}"]`);
+            const toggleIcon = header.querySelector('.group-toggle-icon');
+            stocksGrid.style.display = 'none';
+            toggleIcon.style.transform = 'rotate(-90deg)';
+        }
     });
 }
 
+// 格式化成交量显示
+function formatVolume(volume) {
+    if (volume >= 1000000) {
+        return (volume / 1000000).toFixed(1) + 'M';
+    } else if (volume >= 1000) {
+        return (volume / 1000).toFixed(1) + 'K';
+    }
+    return volume.toString();
+}
 // 渲染加速度排行榜
 function renderAccelerationTop(data) {
     const container = document.getElementById('accelerationTopContainer');
-    const topN = parseInt(document.getElementById('accelerationTopN').value) || 10;
+    if (!container) return;
+    
+    const topNElement = document.getElementById('accelerationTopN');
+    const topN = topNElement ? (parseInt(topNElement.value) || 10) : 10;
     container.innerHTML = '';
 
-    if (!data || data.length === 0) {
+    // 将分组数据转换为扁平数组
+    let flatData = [];
+    
+    // 安全检查
+    if (!data) {
+        // 数据为空
+    } else if (Array.isArray(data)) {
+        // 如果是数组格式（旧格式）
+        flatData = data.filter(stock => stock && stock.price !== null);
+    } else if (typeof data === 'object') {
+        // 如果是分组格式（新格式）
+        try {
+            Object.values(data).forEach(group => {
+                if (group && group.stocks && Array.isArray(group.stocks)) {
+                    flatData = flatData.concat(group.stocks.filter(stock => stock && stock.price !== null));
+                }
+            });
+        } catch (e) {
+            console.error('处理分组数据时出错:', e);
+        }
+    }
+
+    if (!flatData || flatData.length === 0) {
         container.innerHTML = `
             <div class="col-span-full text-center py-8">
                 <p class="text-white/70 text-sm">暂无数据</p>
@@ -571,7 +734,7 @@ function renderAccelerationTop(data) {
     }
 
     // 按加速度降序排序
-    const sortedData = [...data].sort((a, b) => b.acceleration - a.acceleration).slice(0, topN);
+    const sortedData = [...flatData].sort((a, b) => b.acceleration - a.acceleration).slice(0, topN);
 
     sortedData.forEach((item, index) => {
         const card = document.createElement('div');
@@ -674,9 +837,33 @@ function initAccelerationChart() {
 function updateAccelerationChart(data) {
     if (!accelerationChart) return;
     
-    const symbols = data.map(item => item.symbol);
+    // 将分组数据转换为扁平数组
+    let flatData = [];
+    
+    // 安全检查
+    if (!data) {
+        // 数据为空
+    } else if (Array.isArray(data)) {
+        // 如果是数组格式（旧格式）
+        flatData = data.filter(stock => stock && stock.price !== null);
+    } else if (typeof data === 'object') {
+        // 如果是分组格式（新格式）
+        try {
+            Object.values(data).forEach(group => {
+                if (group && group.stocks && Array.isArray(group.stocks)) {
+                    flatData = flatData.concat(group.stocks.filter(stock => stock && stock.price !== null));
+                }
+            });
+        } catch (e) {
+            console.error('处理图表数据时出错:', e);
+        }
+    }
+    
+    if (!flatData || flatData.length === 0) return;
+    
+    const symbols = flatData.map(item => item.symbol);
     const series = symbols.map(symbol => {
-        const item = data.find(d => d.symbol === symbol);
+        const item = flatData.find(d => d.symbol === symbol);
         return {
             name: symbol,
             type: 'line',
