@@ -3,6 +3,8 @@
 """
 import json
 import logging
+import re
+import asyncio
 import httpx
 import pymysql
 from datetime import datetime
@@ -218,6 +220,46 @@ class SmartPredictionTrader:
             return 0
         return round((closes[-1] - closes[-10]) / closes[-10] * 100, 2) if closes[-10] != 0 else 0
 
+    def _extract_llm_fields(self, content: str) -> dict:
+        """从非标准JSON内容中尽力提取字段"""
+        result = {
+            'score': 50,
+            'recommendation': 'hold',
+            'confidence': 0,
+            'reasons': [],
+            'predicted_change': 0
+        }
+
+        if not content:
+            return result
+
+        score_m = re.search(r'"score"\s*:\s*([0-9]+(?:\.[0-9]+)?)', content)
+        if score_m:
+            result['score'] = float(score_m.group(1))
+
+        rec_m = re.search(r'"recommendation"\s*:\s*"?([a-zA-Z]+)"?', content)
+        if rec_m:
+            rec = rec_m.group(1).lower()
+            if rec in ('buy', 'hold', 'sell'):
+                result['recommendation'] = rec
+
+        conf_m = re.search(r'"confidence"\s*:\s*([0-9]+(?:\.[0-9]+)?)', content)
+        if conf_m:
+            result['confidence'] = float(conf_m.group(1))
+
+        pred_m = re.search(r'"predicted_change"\s*:\s*"?([^",}\n]+)', content)
+        if pred_m:
+            result['predicted_change'] = pred_m.group(1).strip()
+
+        reasons_m = re.search(r'"reasons"\s*:\s*\[(.*?)\]', content, re.DOTALL)
+        if reasons_m:
+            reasons_block = reasons_m.group(1)
+            reasons = re.findall(r'"(.*?)"', reasons_block)
+            if reasons:
+                result['reasons'] = reasons
+
+        return result
+
     async def predict_stock_return(self, symbol: str) -> dict:
         """预测股票收益（技术指标）"""
         try:
@@ -274,7 +316,9 @@ class SmartPredictionTrader:
 
     async def llm_analyze_stock(self, symbol: str, historical_data: list, indicators: dict) -> dict:
         """使用大模型分析股票"""
-        if not self.llm_enabled or not self.llm_api_key:
+        # Ollama等本地模型不需要API Key
+        llm_configured = self.llm_api_key or self.llm_provider == 'ollama'
+        if not self.llm_enabled or not llm_configured:
             return {'score': 50, 'analysis': '', 'recommendation': 'hold', 'confidence': 0}
         
         cache_key = f"{symbol}_{datetime.now().strftime('%Y%m%d')}"
@@ -290,7 +334,43 @@ class SmartPredictionTrader:
                 date_str = str(d.get('trade_date') or d.get('date', ''))[:10]
                 price_summary.append(f"{date_str}: ${close:.2f} ({change:+.2f}%)")
             
-            prompt = f"""你是一位专业的股票分析师。请分析以下美股的短期走势并给出买入建议。
+            # 判断是否为云端模型，需要联网搜索
+            is_cloud_model = 'cloud' in self.llm_model.lower()
+            
+            if is_cloud_model:
+                # 云端模型使用联网搜索，获取最新新闻和市场情绪
+                prompt = f"""你是一位专业的股票分析师。请分析以下美股的短期走势并给出买入建议。
+
+**重要：请先联网搜索该股票最新的新闻、财报、分析师评级等信息，结合实时市场数据进行分析。**
+
+股票代码: {symbol}
+
+最近10日价格走势:
+{chr(10).join(price_summary)}
+
+技术指标:
+- RSI(14): {indicators.get('rsi', 50):.2f}
+- MACD信号: {indicators.get('macd_signal', 0):.4f}
+- 均线趋势: {indicators.get('ma_trend', 0):.4f}
+- 波动率(ATR%): {indicators.get('volatility', 0):.2f}
+- 10日动量: {indicators.get('momentum', 0):.2f}%
+
+请综合以下因素进行分析：
+1. 最新公司新闻和公告
+2. 近期财报表现
+3. 分析师评级变化
+4. 行业趋势和竞争对手动态
+5. 宏观经济因素影响
+6. 技术面分析
+
+请以JSON格式回答:
+{{"score": 预测得分(0-100), "recommendation": "buy"或"hold"或"sell", "confidence": 置信度(0-1), "reasons": ["原因1", "原因2", "原因3"], "predicted_change": 预测涨跌幅百分比, "news_summary": "相关新闻摘要"}}
+
+仅返回JSON，不要有其他内容。"""
+                system_prompt = '你是专业的量化交易分析师，具备联网搜索能力。请先搜索最新信息再进行分析，用JSON格式回答。'
+            else:
+                # 本地模型使用基础prompt
+                prompt = f"""你是一位专业的股票分析师。请分析以下美股的短期走势并给出买入建议。
 
 股票代码: {symbol}
 
@@ -308,42 +388,114 @@ class SmartPredictionTrader:
 {{"score": 预测得分(0-100), "recommendation": "buy"或"hold"或"sell", "confidence": 置信度(0-1), "reasons": ["原因1", "原因2"], "predicted_change": 预测涨跌幅}}
 
 仅返回JSON。"""
+                system_prompt = '你是专业的量化交易分析师，用JSON格式回答。'
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            # 构建请求参数
+            request_body = {
+                'model': self.llm_model,
+                'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': prompt}
+                ],
+                'max_tokens': 1000 if is_cloud_model else 800,
+                'temperature': 0.3
+            }
+            
+            # 为云端模型添加联网工具（如果Ollama支持）
+            if is_cloud_model:
+                # Ollama云端模型通过 options 启用联网
+                request_body['options'] = {
+                    'num_predict': 1000
+                }
+                # 增加超时时间，因为联网搜索需要更长时间
+                timeout = 60.0
+                logger.info(f"使用云端模型 {self.llm_model} 分析 {symbol}，已启用联网搜索")
+            else:
+                timeout = 30.0
+
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                # Ollama 不需要 Authorization header
+                headers = {'Content-Type': 'application/json'}
+                if self.llm_api_key:
+                    headers['Authorization'] = f'Bearer {self.llm_api_key}'
+                
                 response = await client.post(
                     f"{self.llm_api_base}/chat/completions",
-                    headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {self.llm_api_key}'},
-                    json={
-                        'model': self.llm_model,
-                        'messages': [
-                            {'role': 'system', 'content': '你是专业的量化交易分析师，用JSON格式回答。'},
-                            {'role': 'user', 'content': prompt}
-                        ],
-                        'max_tokens': 800,
-                        'temperature': 0.3
-                    }
+                    headers=headers,
+                    json=request_body
                 )
                 
                 if response.status_code == 200:
                     result = response.json()
                     content = result.get('choices', [{}])[0].get('message', {}).get('content', '{}')
                     content = content.strip()
-                    if content.startswith('```'):
-                        content = content.split('```')[1]
-                        if content.startswith('json'):
-                            content = content[4:]
-                    content = content.strip()
                     
-                    llm_result = json.loads(content)
+                    # 处理 deepseek 的思考标签（先处理，因为JSON可能在思考标签之后）
+                    if '<think>' in content:
+                        think_end = content.find('</think>')
+                        if think_end != -1:
+                            content = content[think_end + 8:].strip()
+                    
+                    # 优先提取代码块中的JSON
+                    fenced = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content, re.IGNORECASE)
+                    if fenced:
+                        content = fenced.group(1).strip()
+                    
+                    # 尝试从内容中提取JSON对象
+                    if not content.startswith('{'):
+                        match = re.search(r'\{[\s\S]*\}', content)
+                        if match:
+                            content = match.group(0)
+                    
+                    content = content.strip()
+                    logger.debug(f"LLM返回内容解析: {content[:300]}")
+                    
+                    if not content or content in ('```', '```json'):
+                        logger.info(f"LLM返回空JSON内容 {symbol}")
+                        return {'score': 50, 'analysis': '', 'recommendation': 'hold', 'confidence': 0}
+                    
+                    # 只有代码块但没有JSON对象
+                    if '```' in content and '{' not in content:
+                        logger.info(f"LLM返回仅代码块无JSON {symbol}: {content[:50]}")
+                        return {'score': 50, 'analysis': '', 'recommendation': 'hold', 'confidence': 0}
+                    
+                    try:
+                        llm_result = json.loads(content)
+                    except json.JSONDecodeError:
+                        llm_result = self._extract_llm_fields(content)
+                        logger.info(f"LLM返回非标准JSON，已使用兜底解析 {symbol}")
+                    
+                    def to_float(value, default=0.0):
+                        if isinstance(value, (int, float)):
+                            return float(value)
+                        if isinstance(value, str):
+                            s = value.strip().replace('%', '')
+                            m = re.search(r'-?\d+(?:\.\d+)?', s)
+                            if m:
+                                return float(m.group(0))
+                        return default
+                    
+                    llm_result['score'] = to_float(llm_result.get('score', 50), 50)
+                    llm_result['confidence'] = to_float(llm_result.get('confidence', 0), 0)
+                    llm_result['predicted_change'] = to_float(llm_result.get('predicted_change', 0), 0)
+                    
                     llm_result['analysis'] = '; '.join(llm_result.get('reasons', []))
-                    llm_result['source'] = 'llm'
+                    if llm_result.get('news_summary'):
+                        llm_result['analysis'] += f" [新闻] {llm_result['news_summary']}"
+                    llm_result['source'] = 'llm_cloud' if is_cloud_model else 'llm'
                     self.llm_cache[cache_key] = llm_result
                     
-                    logger.info(f"LLM分析完成 {symbol}: score={llm_result.get('score')}")
+                    logger.info(f"LLM分析完成 {symbol}: score={llm_result.get('score')}, source={llm_result['source']}")
                     return llm_result
+                else:
+                    logger.info(f"LLM请求失败 {symbol}: HTTP {response.status_code} - {response.text[:200]}")
                     
         except Exception as e:
-            logger.error(f"LLM分析失败 {symbol}: {e}")
+            msg = str(e).strip()
+            if msg:
+                logger.info(f"LLM分析失败 {symbol}: {msg}")
+            else:
+                logger.debug(f"LLM分析失败 {symbol}: unknown_error")
         
         return {'score': 50, 'analysis': '', 'recommendation': 'hold', 'confidence': 0}
 
@@ -356,7 +508,9 @@ class SmartPredictionTrader:
             
             tech_prediction = await self.predict_stock_return(symbol)
             
-            if not self.llm_enabled or not self.llm_api_key:
+            # Ollama等本地模型不需要API Key
+            llm_configured = self.llm_api_key or self.llm_provider == 'ollama'
+            if not self.llm_enabled or not llm_configured:
                 return tech_prediction
             
             indicators = self.calculate_technical_indicators(historical_data)
@@ -395,7 +549,7 @@ class SmartPredictionTrader:
                 'indicators': indicators
             }
         except Exception as e:
-            logger.error(f"混合预测失败 {symbol}: {e}")
+            logger.info(f"混合预测失败 {symbol}: {e}")
             return await self.predict_stock_return(symbol)
 
     async def run_daily_prediction(self) -> list:
@@ -408,7 +562,9 @@ class SmartPredictionTrader:
             stocks = cursor.fetchall()
             
             predictions = []
-            llm_status = "启用" if (self.llm_enabled and self.llm_api_key) else "未启用"
+            # Ollama等本地模型不需要API Key
+            llm_configured = self.llm_api_key or self.llm_provider == 'ollama'
+            llm_status = "启用" if (self.llm_enabled and llm_configured) else "未启用"
             logger.info(f"开始每日预测，共{len(stocks)}只股票，LLM辅助: {llm_status}")
             
             for stock in stocks:
@@ -416,30 +572,45 @@ class SmartPredictionTrader:
                 prediction = await self.hybrid_predict(symbol)
                 predictions.append(prediction)
                 
-                try:
-                    cursor.execute("""
-                        INSERT INTO stock_predictions 
-                        (symbol, prediction_date, predicted_return, confidence_score, technical_score, 
-                         llm_score, llm_recommendation, llm_analysis)
-                        VALUES (%s, CURDATE(), %s, %s, %s, %s, %s, %s)
-                        ON DUPLICATE KEY UPDATE
-                        predicted_return = VALUES(predicted_return),
-                        confidence_score = VALUES(confidence_score),
-                        technical_score = VALUES(technical_score),
-                        llm_score = VALUES(llm_score),
-                        llm_recommendation = VALUES(llm_recommendation),
-                        llm_analysis = VALUES(llm_analysis)
-                    """, (
-                        symbol, 
-                        prediction.get('predicted_return', 0), 
-                        prediction.get('confidence', 0), 
-                        prediction.get('technical_score', prediction.get('score', 0)),
-                        prediction.get('llm_score'),
-                        prediction.get('llm_recommendation'),
-                        prediction.get('llm_analysis', '')[:500]
-                    ))
-                except Exception as e:
-                    logger.warning(f"保存预测结果失败 {symbol}: {e}")
+                db_symbol = str(symbol)[:10]
+                if db_symbol != symbol:
+                    logger.info(f"预测结果symbol过长，已截断: {symbol} -> {db_symbol}")
+                
+                # 保存结果（带重试，避免锁等待超时）
+                for attempt in range(3):
+                    try:
+                        cursor.execute("""
+                            INSERT INTO stock_predictions 
+                            (symbol, prediction_date, predicted_return, confidence_score, technical_score, 
+                             llm_score, llm_recommendation, llm_analysis)
+                            VALUES (%s, CURDATE(), %s, %s, %s, %s, %s, %s)
+                            ON DUPLICATE KEY UPDATE
+                            predicted_return = VALUES(predicted_return),
+                            confidence_score = VALUES(confidence_score),
+                            technical_score = VALUES(technical_score),
+                            llm_score = VALUES(llm_score),
+                            llm_recommendation = VALUES(llm_recommendation),
+                            llm_analysis = VALUES(llm_analysis)
+                        """, (
+                            db_symbol, 
+                            prediction.get('predicted_return', 0), 
+                            prediction.get('confidence', 0), 
+                            prediction.get('technical_score', prediction.get('score', 0)),
+                            prediction.get('llm_score'),
+                            prediction.get('llm_recommendation'),
+                            prediction.get('llm_analysis', '')[:500]
+                        ))
+                        conn.commit()
+                        break
+                    except pymysql.err.OperationalError as e:
+                        if e.args and e.args[0] in (1205, 1213) and attempt < 2:
+                            await asyncio.sleep(0.2 * (attempt + 1))
+                            continue
+                        logger.info(f"保存预测结果失败 {symbol}: {e}")
+                        break
+                    except Exception as e:
+                        logger.info(f"保存预测结果失败 {symbol}: {e}")
+                        break
             
             conn.commit()
             cursor.close()
@@ -449,7 +620,7 @@ class SmartPredictionTrader:
             logger.info(f"每日预测完成，共预测{len(predictions)}只股票")
             return predictions
         except Exception as e:
-            logger.error(f"运行每日预测失败: {e}")
+            logger.info(f"运行每日预测失败: {e}")
             return []
 
     async def get_top_recommendations(self, limit: int = 3) -> list:
@@ -502,11 +673,13 @@ class SmartPredictionTrader:
             
             return recommendations[:limit]
         except Exception as e:
-            logger.error(f"获取买入推荐失败: {e}")
+            logger.info(f"获取买入推荐失败: {e}")
             return []
 
     def get_status(self) -> dict:
         """获取智能交易状态"""
+        # Ollama等本地模型不需要API Key
+        llm_configured = bool(self.llm_api_key) or self.llm_provider == 'ollama'
         return {
             'enabled': self.is_enabled,
             'max_daily_trades': self.max_daily_trades,
@@ -522,7 +695,7 @@ class SmartPredictionTrader:
             'llm_api_base': self.llm_api_base,
             'llm_model': self.llm_model,
             'llm_weight': self.llm_weight,
-            'llm_configured': bool(self.llm_api_key)
+            'llm_configured': llm_configured
         }
 
 

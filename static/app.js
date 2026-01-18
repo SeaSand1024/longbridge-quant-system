@@ -1352,10 +1352,26 @@ async function loadSmartTradeSettings() {
             if (llmApiBase) {
                 llmApiBase.value = status.llm_api_base || 'https://api.openai.com/v1';
             }
+            
+            // 加载模型列表，然后设置当前值
+            const currentLlmModel = status.llm_model || 'gpt-4o-mini';
+            await loadLlmModels();
             const llmModel = document.getElementById('llmModel');
-            if (llmModel) {
-                llmModel.value = status.llm_model || 'gpt-4o-mini';
+            if (llmModel && currentLlmModel) {
+                // 检查当前模型是否在列表中
+                const modelExists = [...llmModel.options].some(o => o.value === currentLlmModel);
+                if (modelExists) {
+                    llmModel.value = currentLlmModel;
+                } else if (llmModel.options.length > 0) {
+                    // 如果不存在，添加一个临时选项
+                    const tempOption = document.createElement('option');
+                    tempOption.value = currentLlmModel;
+                    tempOption.textContent = currentLlmModel + ' (当前配置)';
+                    llmModel.insertBefore(tempOption, llmModel.firstChild);
+                    llmModel.value = currentLlmModel;
+                }
             }
+            
             const llmWeight = document.getElementById('llmWeight');
             if (llmWeight) {
                 llmWeight.value = status.llm_weight || 0.3;
@@ -1621,33 +1637,84 @@ function initSmartTradeEvents() {
         });
     }
     
-    // LLM提供商切换时自动更新API Base
+    // LLM提供商切换时自动更新API Base和模型列表
     const llmProvider = document.getElementById('llmProvider');
     if (llmProvider) {
-        llmProvider.addEventListener('change', function() {
+        llmProvider.addEventListener('change', async function() {
             const apiBase = document.getElementById('llmApiBase');
-            const model = document.getElementById('llmModel');
-            if (apiBase && model) {
+            if (apiBase) {
                 switch(this.value) {
                     case 'openai':
                         apiBase.value = 'https://api.openai.com/v1';
-                        model.value = 'gpt-4o-mini';
                         break;
                     case 'deepseek':
                         apiBase.value = 'https://api.deepseek.com/v1';
-                        model.value = 'deepseek-chat';
                         break;
                     case 'zhipu':
                         apiBase.value = 'https://open.bigmodel.cn/api/paas/v4';
-                        model.value = 'glm-4-flash';
                         break;
                     case 'ollama':
                         apiBase.value = 'http://localhost:11434/v1';
-                        model.value = 'llama3';
                         break;
                 }
             }
+            // 加载对应的模型列表
+            await loadLlmModels();
         });
+    }
+    
+    // 刷新模型列表按钮
+    const refreshLlmModelsBtn = document.getElementById('refreshLlmModelsBtn');
+    if (refreshLlmModelsBtn) {
+        refreshLlmModelsBtn.addEventListener('click', loadLlmModels);
+    }
+}
+
+// 加载 LLM 模型列表
+async function loadLlmModels() {
+    const modelSelect = document.getElementById('llmModel');
+    if (!modelSelect) return;
+    
+    const currentValue = modelSelect.value;
+    modelSelect.innerHTML = '<option value="">加载中...</option>';
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/config/llm-models`, {
+            credentials: 'include'
+        });
+        const result = await response.json();
+        
+        if (result.code === 0 && result.data?.models) {
+            modelSelect.innerHTML = '';
+            const models = result.data.models;
+            
+            if (models.length === 0) {
+                modelSelect.innerHTML = '<option value="">无可用模型</option>';
+                return;
+            }
+            
+            models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.name;
+                option.textContent = model.description || model.name;
+                if (model.type === 'cloud') {
+                    option.textContent += ' ☁️';
+                }
+                modelSelect.appendChild(option);
+            });
+            
+            // 恢复之前选中的值或选择第一个
+            if (currentValue && [...modelSelect.options].some(o => o.value === currentValue)) {
+                modelSelect.value = currentValue;
+            } else if (models.length > 0) {
+                modelSelect.value = models[0].name;
+            }
+        } else {
+            modelSelect.innerHTML = '<option value="">获取模型失败</option>';
+        }
+    } catch (error) {
+        console.error('加载LLM模型列表失败:', error);
+        modelSelect.innerHTML = '<option value="">加载失败</option>';
     }
 }
 

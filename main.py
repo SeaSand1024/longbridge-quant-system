@@ -3,6 +3,7 @@
 """
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -31,8 +32,43 @@ from app.routers import (
     smart_trade_router, longbridge_router, market_data_router
 )
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期"""
+    # 启动事件
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        inserted = ensure_default_system_configs(cursor)
+        if inserted:
+            conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"初始化系统配置失败: {e}")
+
+    # 加载长桥配置
+    _load_longbridge_config()
+
+    # 初始化SDK
+    from app.services import longbridge_sdk as sdk_module
+    sdk_module.longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
+    await sdk_module.longbridge_sdk.connect()
+
+    # 启动异步任务队列
+    await task_queue.start()
+
+    logger.info("系统启动完成")
+
+    yield
+
+    # 关闭事件
+    await task_queue.stop()
+    logger.info("系统已关闭")
+
+
 # 创建FastAPI应用
-app = FastAPI(title="美股量化交易系统")
+app = FastAPI(title="美股量化交易系统", lifespan=lifespan)
 
 # 配置CORS
 app.add_middleware(
@@ -59,43 +95,6 @@ app.include_router(market_data_router)
 async def root():
     """根路径重定向到静态页面"""
     return RedirectResponse(url="/static/index.html")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """启动事件"""
-    # 确保系统配置存在默认值
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        inserted = ensure_default_system_configs(cursor)
-        if inserted:
-            conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.warning(f"初始化系统配置失败: {e}")
-
-    # 加载长桥配置
-    _load_longbridge_config()
-
-    # 初始化SDK
-    from app.services import longbridge_sdk as sdk_module
-    sdk_module.longbridge_sdk = LongBridgeSDK(LONGBRIDGE_CONFIG)
-    await sdk_module.longbridge_sdk.connect()
-
-    # 启动异步任务队列
-    await task_queue.start()
-    
-    logger.info("系统启动完成")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """关闭事件"""
-    # 停止任务队列
-    await task_queue.stop()
-    logger.info("系统已关闭")
 
 
 def _load_longbridge_config():
@@ -149,6 +148,6 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=False,
         log_level="info"
     )

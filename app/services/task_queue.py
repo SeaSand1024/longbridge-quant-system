@@ -12,15 +12,18 @@ class AsyncTaskQueue:
     """异步任务队列，用于分离监控任务和API请求"""
     
     def __init__(self):
-        self.queue = asyncio.Queue()
+        self.queue = None
         self.is_running = False
         self.worker_task = None
+        self._loop = None
     
     async def start(self):
         """启动任务队列"""
         if self.is_running:
             return
         self.is_running = True
+        self._loop = asyncio.get_running_loop()
+        self.queue = asyncio.Queue()
         self.worker_task = asyncio.create_task(self._worker())
         logger.info("异步任务队列已启动")
     
@@ -28,15 +31,36 @@ class AsyncTaskQueue:
         """停止任务队列"""
         self.is_running = False
         if self.worker_task:
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            task_loop = None
+            try:
+                task_loop = self.worker_task.get_loop()
+            except Exception:
+                task_loop = None
+
+            if current_loop is not None and task_loop is not None and current_loop is not task_loop:
+                logger.info("任务队列停止跳过：事件循环不一致")
+                self.worker_task = None
+                self.queue = None
+                return
+
             self.worker_task.cancel()
             try:
                 await self.worker_task
             except asyncio.CancelledError:
                 pass
+
+        self.worker_task = None
+        self.queue = None
         logger.info("异步任务队列已停止")
     
     async def add_task(self, task_func, *args, **kwargs):
         """添加任务到队列"""
+        if self.queue is None:
+            self.queue = asyncio.Queue()
         await self.queue.put((task_func, args, kwargs))
     
     async def _worker(self):

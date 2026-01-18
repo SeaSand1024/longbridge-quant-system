@@ -86,6 +86,9 @@ class LongBridgeSDK:
         self.is_connected = False
         self.quote_ctx = None
         self.trade_ctx = None
+        self._connect_lock = asyncio.Lock()
+        self._last_connect_at = 0.0
+        self._connect_cooldown = 10.0
         self.use_real_sdk = (
             LONGBRIDGE_AVAILABLE and 
             config.get('app_key') and 
@@ -100,31 +103,62 @@ class LongBridgeSDK:
 
     async def connect(self):
         """连接到长桥"""
-        logger.info("正在连接长桥SDK...")
+        now = time.time()
+        if self.is_connected and (now - self._last_connect_at) < self._connect_cooldown:
+            logger.info("长桥SDK已连接，跳过重复连接")
+            return
 
-        if self.use_real_sdk:
-            try:
-                lb_config = LBConfig(
-                    app_key=self.config['app_key'],
-                    app_secret=self.config['app_secret'],
-                    access_token=self.config['access_token'],
-                    http_url=self.config.get('http_url', 'https://openapi.longbridgeapp.com'),
-                    quote_ws_url=self.config.get('quote_ws_url', 'wss://openapi-quote.longbridgeapp.com'),
-                    trade_ws_url=self.config.get('trade_ws_url', 'wss://openapi-trade.longbridgeapp.com')
-                )
+        async with self._connect_lock:
+            now = time.time()
+            if self.is_connected and (now - self._last_connect_at) < self._connect_cooldown:
+                logger.info("长桥SDK已连接，跳过重复连接")
+                return
 
-                self.quote_ctx = QuoteContext(lb_config)
-                self.trade_ctx = TradeContext(lb_config)
+            logger.info("正在连接长桥SDK...")
+
+            if self.use_real_sdk:
+                try:
+                    # 清理旧连接，避免触发连接数限制
+                    if self.quote_ctx is not None:
+                        close_fn = getattr(self.quote_ctx, 'close', None)
+                        if callable(close_fn):
+                            close_fn()
+                    if self.trade_ctx is not None:
+                        close_fn = getattr(self.trade_ctx, 'close', None)
+                        if callable(close_fn):
+                            close_fn()
+                except Exception as e:
+                    logger.warning(f"清理旧连接失败: {e}")
+
+                try:
+                    lb_config = LBConfig(
+                        app_key=self.config['app_key'],
+                        app_secret=self.config['app_secret'],
+                        access_token=self.config['access_token'],
+                        http_url=self.config.get('http_url', 'https://openapi.longbridgeapp.com'),
+                        quote_ws_url=self.config.get('quote_ws_url', 'wss://openapi-quote.longbridgeapp.com'),
+                        trade_ws_url=self.config.get('trade_ws_url', 'wss://openapi-trade.longbridgeapp.com')
+                    )
+
+                    self.quote_ctx = QuoteContext(lb_config)
+                    self.trade_ctx = TradeContext(lb_config)
+                    self.is_connected = True
+                    self._last_connect_at = time.time()
+                    logger.info("长桥SDK连接成功（真实模式）")
+                except Exception as e:
+                    error_msg = str(e)
+                    if 'connections limitation is hit' in error_msg or '(403)' in error_msg:
+                        logger.info(f"长桥SDK连接受限: {error_msg}")
+                    else:
+                        logger.info(f"长桥SDK连接失败: {error_msg}")
+                    logger.info("切换到模拟模式")
+                    self.use_real_sdk = False
+                    self.is_connected = True
+                    self._last_connect_at = time.time()
+            else:
                 self.is_connected = True
-                logger.info("长桥SDK连接成功（真实模式）")
-            except Exception as e:
-                logger.error(f"长桥SDK连接失败: {str(e)}")
-                logger.info("切换到模拟模式")
-                self.use_real_sdk = False
-                self.is_connected = True
-        else:
-            self.is_connected = True
-            logger.info("长桥SDK连接成功（模拟模式）")
+                self._last_connect_at = time.time()
+                logger.info("长桥SDK连接成功（模拟模式）")
 
     def subscribe_realtime_quotes(self, symbols: List[str], callback):
         """订阅实时行情推送"""
@@ -404,7 +438,12 @@ class LongBridgeSDK:
                 
                 return result
             except Exception as e:
-                logger.error(f"获取K线数据失败: {str(e)}")
+                error_msg = str(e)
+                if 'no quote access' in error_msg or '(301604)' in error_msg:
+                    logger.info(f"获取K线无权限: {error_msg}")
+                    return self._get_mock_klines(symbol, count)
+                
+                logger.info(f"获取K线数据失败: {error_msg}")
                 
                 # 如果是 invalid symbol，尝试港股补零后缀重试一次
                 try:
@@ -433,7 +472,7 @@ class LongBridgeSDK:
                                     result[i]['change_pct'] = ((result[i]['close'] - prev_close) / prev_close) * 100
                             return result
                 except Exception as e2:
-                    logger.error(f"补零后仍失败: {str(e2)}")
+                    logger.info(f"补零后仍失败: {str(e2)}")
                 
                 return self._get_mock_klines(symbol, count)
         
